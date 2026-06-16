@@ -1,0 +1,11 @@
+# Domain terms that the spell checker might flag. Extend as needed:
+#   pre-commit run typos --all-files
+[default]
+# RIHS01 type-hash hex strings in generated code are not prose.
+extend-ignore-re = ['RIHS01_[0-9a-f]+']
+
+[default.extend-words]
+# ROS / DDS jargon are real words here, not typos.
+rosidl = "rosidl"
+rmw = "rmw"
+ratatui = "ratatui"

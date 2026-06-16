@@ -1,0 +1,15 @@
+[package]
+name = "roscmp-dds"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+rustdds = "0.11"
+bytes = "1"
+ratatui = "0.29"
+crossterm = "0.28"
+
+[lints]
+workspace = true

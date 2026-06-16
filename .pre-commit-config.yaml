@@ -1,0 +1,45 @@
+# Run `pre-commit install` after `git init` to enable.
+# Manual run: `pre-commit run --all-files`
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.28.4
+    hooks:
+      - id: typos
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy (pedantic, -D warnings)
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-deny
+        name: cargo deny check
+        entry: cargo deny check
+        language: system
+        files: '(Cargo\.(toml|lock)|deny\.toml)$'
+        pass_filenames: false
+      - id: cargo-update
+        name: cargo update (refresh deps)
+        entry: cargo update
+        language: system
+        stages: [manual]
+        pass_filenames: false

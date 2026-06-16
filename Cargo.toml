@@ -1,0 +1,33 @@
+[package]
+name = "roscmp"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+nom = "8.0.0"
+sha2 = "0.11.0"
+
+[lints]
+workspace = true
+
+[workspace]
+members = [".", "roscmp-dds"]
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Curated allows — intentional or noise for this codebase:
+missing_errors_doc = "allow"       # app-level; errors are self-describing
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+format_push_string = "allow"       # codegen builds source by appending
+wildcard_imports = "allow"         # IR/AST re-exports
+enum_glob_use = "allow"            # `use Prim::*` etc. in match arms
+doc_markdown = "allow"             # ROS/type names in prose
+float_cmp = "allow"                # exact round-trip equality in tests
+# CDR (de)serialization deliberately reinterprets integer widths/signs:
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
