@@ -31,6 +31,7 @@ fn main() -> ExitCode {
 struct Options {
     lang: String,
     out: Option<PathBuf>,
+    dds: bool,
     files: Vec<PathBuf>,
 }
 
@@ -70,6 +71,7 @@ fn run(args: &[String]) -> Result<(), String> {
 
     for lang in targets {
         let (code, filename) = match lang {
+            "rust" if opts.dds => (codegen::rust::generate_dds(&program), "roscmp_msgs.rs"),
             "rust" => (codegen::rust::generate(&program), "roscmp_msgs.rs"),
             "c" => (codegen::c::generate(&program), "roscmp_msgs.h"),
             "python" => (codegen::python::generate(&program), "roscmp_msgs.py"),
@@ -91,6 +93,7 @@ fn run(args: &[String]) -> Result<(), String> {
 fn parse_args(args: &[String]) -> Result<Options, String> {
     let mut lang = "all".to_string();
     let mut out = None;
+    let mut dds = false;
     let mut files = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -103,12 +106,19 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
                 i += 1;
                 out = Some(PathBuf::from(args.get(i).ok_or("--out requires a value")?));
             }
+            // Rust backend only: also emit `crate::codec::CdrMsg` impls for roscmp-dds.
+            "--dds" => dds = true,
             other if other.starts_with("--") => return Err(format!("unknown flag `{other}`")),
             other => files.push(PathBuf::from(other)),
         }
         i += 1;
     }
-    Ok(Options { lang, out, files })
+    Ok(Options {
+        lang,
+        out,
+        dds,
+        files,
+    })
 }
 
 /// Infer `(package, Name)` from a `.msg` path.

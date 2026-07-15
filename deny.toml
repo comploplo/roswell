@@ -31,6 +31,18 @@ allow = [
 [licenses.private]
 ignore = true
 
+# Verification-only Creusot tooling (LGPL-2.1). Pulled in solely by the opt-in
+# `verify` feature — never compiled or linked into shipped artifacts — so its
+# copyleft terms do not reach roscmp's distribution. Scoped per-crate so the
+# LGPL allowance does not widen to the rest of the tree.
+[[licenses.exceptions]]
+crate = "creusot-std"
+allow = ["LGPL-2.1-or-later"]
+
+[[licenses.exceptions]]
+crate = "creusot-std-proc"
+allow = ["LGPL-2.1-or-later"]
+
 [bans]
 # Duplicate versions are common in large trees; surface but don't fail the gate.
 multiple-versions = "warn"

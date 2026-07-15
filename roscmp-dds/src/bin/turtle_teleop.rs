@@ -12,7 +12,7 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use roscmp_dds::msgs::{geometry_msgs__Twist, geometry_msgs__Vector3, turtlesim__Pose};
-use roscmp_dds::transport::{Dds, MsgPublisher, MsgSubscriber, Transport};
+use roscmp_dds::transport::{Dds, MsgPublisher, MsgSubscriber, Qos, Transport};
 
 /// The pose fields we display (the generated message isn't `Copy`).
 #[derive(Clone, Copy)]
@@ -51,8 +51,8 @@ fn latest_pose(sub: &mut impl MsgSubscriber<turtlesim__Pose>, current: &mut Opti
 fn main() {
     let auto = std::env::args().nth(1).as_deref() == Some("auto");
     let dds = Dds::new(0);
-    let cmd = dds.publisher::<geometry_msgs__Twist>("/turtle1/cmd_vel");
-    let mut pose = dds.subscriber::<turtlesim__Pose>("/turtle1/pose");
+    let cmd = dds.publisher::<geometry_msgs__Twist>("/turtle1/cmd_vel", Qos::Default);
+    let mut pose = dds.subscriber::<turtlesim__Pose>("/turtle1/pose", Qos::Default);
     if auto {
         run_auto(&cmd, &mut pose);
     } else {

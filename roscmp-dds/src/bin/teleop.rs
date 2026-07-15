@@ -4,11 +4,11 @@
 use std::time::Duration;
 
 use roscmp_dds::msgs::{geometry_msgs__Twist, geometry_msgs__Vector3};
-use roscmp_dds::transport::{Dds, MsgPublisher, Transport};
+use roscmp_dds::transport::{Dds, MsgPublisher, Qos, Transport};
 
 fn main() {
     let dds = Dds::new(0);
-    let publisher = dds.publisher::<geometry_msgs__Twist>("/cmd_vel");
+    let publisher = dds.publisher::<geometry_msgs__Twist>("/cmd_vel", Qos::Default);
 
     println!("teleop: driving forward + turning on /cmd_vel");
     for i in 0..40 {

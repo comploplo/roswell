@@ -8,12 +8,25 @@ publish = false
 [dependencies]
 nom = "8.0.0"
 sha2 = "0.11.0"
+# The machine-checked pure-arithmetic cores (panic-freedom + functional
+# contracts proven with Creusot). `dynamic::round_up` delegates here; the
+# equivalence test pins the embedded CDR padding formula to its verified twin.
+# A tiny in-workspace crate with no external deps. See docs/RT.md.
+roscmp-verify = { path = "roscmp-verify", version = "0.1.0" }
 
 [lints]
 workspace = true
 
 [workspace]
-members = [".", "roscmp-dds"]
+members = [".", "roscmp-dds", "roscmp-c", "roscmp-verify"]
+# `fuzz/` is a detached cargo-fuzz crate (nightly + libfuzzer only); keep it out
+# of the stable `--workspace` gate. See fuzz/Cargo.toml.
+exclude = ["fuzz"]
+
+[workspace.lints.rust]
+# `--cfg creusot` is set by the Creusot compiler under `cargo creusot`; register
+# it so the normal (pedantic, -D warnings) gate does not flag the gated `use`s.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(creusot)'] }
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

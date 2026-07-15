@@ -6,6 +6,7 @@
 pub mod ast;
 pub mod cdr;
 pub mod codegen;
+pub mod dynamic;
 pub mod idl;
 pub mod ir;
 pub mod parser;

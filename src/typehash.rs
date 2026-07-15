@@ -17,6 +17,20 @@ use crate::ir::{Element, Message, MsgId, Prim, ResolvedType};
 /// Compute the `RIHS01_…` type hash for `root`, given all reachable messages
 /// (as produced by [`crate::resolve`]). Returns `None` if `root` is absent.
 pub fn type_hash(messages: &[Message], root: &MsgId) -> Option<String> {
+    let json = type_description_json(messages, root)?;
+    let mut hasher = Sha256::new();
+    hasher.update(json.as_bytes());
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(64);
+    for b in digest {
+        let _ = write!(hex, "{b:02x}");
+    }
+    Some(format!("RIHS01_{hex}"))
+}
+
+/// Build the JSON object ROS hashes for RIHS01 and serves through
+/// `~/get_type_description`.
+pub fn type_description_json(messages: &[Message], root: &MsgId) -> Option<String> {
     let map: BTreeMap<&MsgId, &Message> = messages.iter().map(|m| (&m.id, m)).collect();
     let root_msg = map.get(root)?;
 
@@ -28,20 +42,11 @@ pub fn type_hash(messages: &[Message], root: &MsgId) -> Option<String> {
     collect_refs(root_msg, &map, &mut seen, &mut refs);
 
     let refs_json: Vec<String> = refs.into_values().collect();
-    let json = format!(
+    Some(format!(
         "{{\"type_description\": {}, \"referenced_type_descriptions\": [{}]}}",
         itd_json(root_msg),
         refs_json.join(", ")
-    );
-
-    let mut hasher = Sha256::new();
-    hasher.update(json.as_bytes());
-    let digest = hasher.finalize();
-    let mut hex = String::with_capacity(64);
-    for b in digest {
-        let _ = write!(hex, "{b:02x}");
-    }
-    Some(format!("RIHS01_{hex}"))
+    ))
 }
 
 fn collect_refs(
@@ -73,9 +78,25 @@ fn nested_id(ty: &ResolvedType) -> Option<MsgId> {
     }
 }
 
-/// Full ROS type name. We assume the `msg` subnamespace (the common case).
+/// Full ROS type name, including generated service/action namespaces.
 fn full_name(id: &MsgId) -> String {
-    format!("{}/msg/{}", id.package, id.name)
+    format!("{}/{}/{}", id.package, subnamespace(&id.name), id.name)
+}
+
+fn subnamespace(name: &str) -> &'static str {
+    if name.contains("_SendGoal_")
+        || name.contains("_GetResult_")
+        || name.ends_with("_Goal")
+        || name.ends_with("_Result")
+        || name.ends_with("_Feedback")
+        || name.ends_with("_FeedbackMessage")
+    {
+        "action"
+    } else if name.ends_with("_Request") || name.ends_with("_Response") {
+        "srv"
+    } else {
+        "msg"
+    }
 }
 
 fn itd_json(msg: &Message) -> String {

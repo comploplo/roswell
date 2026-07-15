@@ -1,0 +1,58 @@
+# cargo-fuzz targets for roscmp's wire/file-facing parsers and the unsafe
+# runtime codec. This crate is DELIBERATELY DETACHED from the main workspace
+# (own `[workspace]` table below, and excluded in the root Cargo.toml) so that
+# `scripts/check.sh` — which runs `cargo {clippy,test} --workspace` on stable —
+# never tries to build these libfuzzer targets (they need nightly + a sanitizer
+# runtime). Build/run them only via `cargo +nightly fuzz run <target>`.
+[package]
+name = "roscmp-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+# Detach from the parent workspace: these targets are nightly/instrumented-only.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.roscmp]
+path = ".."
+
+[dependencies.roscmp-dds]
+path = "../roscmp-dds"
+
+# Keep line-number symbols for crash triage without full debug bloat.
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "dynamic_decode"
+path = "fuzz_targets/dynamic_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "msg_parser"
+path = "fuzz_targets/msg_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "idl_parser"
+path = "fuzz_targets/idl_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mcap_reader"
+path = "fuzz_targets/mcap_reader.rs"
+test = false
+doc = false
+bench = false

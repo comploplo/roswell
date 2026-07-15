@@ -1,2 +1,10 @@
 /target
 /generated
+python/.venv-test/
+python/roscmp.egg-info/
+
+# Creusot verification: keep the proof sessions (verif/**/proof.json) checked
+# in; regenerate the translated Coma and the prover cache locally.
+*.coma
+.why3find
+_creusot_erasure

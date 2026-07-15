@@ -1,0 +1,12 @@
+byte DEBUG=10
+byte INFO=20
+byte WARN=30
+byte ERROR=40
+byte FATAL=50
+builtin_interfaces/Time stamp
+uint8 level
+string name
+string msg
+string file
+string function
+uint32 line

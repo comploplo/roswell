@@ -1,0 +1,9 @@
+string type_name
+string type_hash
+bool include_type_sources
+---
+bool successful
+string failure_reason
+TypeDescription type_description
+TypeSource[] type_sources
+KeyValue[] extra_information

@@ -163,4 +163,22 @@ mod tests {
         let buf = [0xFF, 0xFF, 0x00, 0x00];
         assert_eq!(Reader::new(&buf).err(), Some(CdrError::BadEncapsulation));
     }
+
+    /// The CDR alignment formula is embedded verbatim into generated bindings,
+    /// so it cannot call an external crate. This pins the embedded `pad_to` to
+    /// its Creusot-verified twin `roscmp_verify::pad_to` across every CDR
+    /// alignment and a wide offset range, so the machine-checked panic-freedom,
+    /// `result < a`, and alignment guarantees transfer to this copy. See
+    /// `docs/RT.md`.
+    #[test]
+    fn pad_to_matches_verified_core() {
+        for a in [1usize, 2, 4, 8] {
+            for off in 0usize..1024 {
+                let p = pad_to(off, a);
+                assert_eq!(p, roscmp_verify::pad_to(off, a));
+                assert!(p < a);
+                assert_eq!((off + p) % a, 0);
+            }
+        }
+    }
 }

@@ -196,3 +196,86 @@ geometry_msgs/Point[] waypoints
     let out = run_generated(&[POINT, ("demo_msgs", "Telemetry", src)], body, "complex");
     assert_eq!(out.trim(), "true true");
 }
+
+#[test]
+fn sensor_msgs_imu_round_trips() {
+    // A real sensor_msgs type: nested Header, two nested Vector3/Quaternion, and
+    // three float64[9] covariance arrays.
+    let imu = "\
+std_msgs/Header header
+geometry_msgs/Quaternion orientation
+float64[9] orientation_covariance
+geometry_msgs/Vector3 angular_velocity
+float64[9] angular_velocity_covariance
+geometry_msgs/Vector3 linear_acceleration
+float64[9] linear_acceleration_covariance
+";
+    let body = r#"
+    let cov: [f64; 9] = [0.1, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0, 0.3];
+    let m = sensor_msgs__Imu {
+        header: std_msgs__Header {
+            stamp: builtin_interfaces__Time { sec: 10, nanosec: 11 },
+            frame_id: RosString::alloc("imu_link"),
+        },
+        orientation: geometry_msgs__Quaternion { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+        orientation_covariance: cov,
+        angular_velocity: geometry_msgs__Vector3 { x: 0.1, y: 0.2, z: 0.3 },
+        angular_velocity_covariance: cov,
+        linear_acceleration: geometry_msgs__Vector3 { x: 9.8, y: 0.0, z: 0.0 },
+        linear_acceleration_covariance: cov,
+    };
+    let bytes = m.to_cdr(Endian::Little);
+    let mut back = sensor_msgs__Imu::from_cdr(&bytes).unwrap();
+    unsafe {
+        let ok = back.header.stamp.sec == 10
+            && back.header.frame_id.as_str() == "imu_link"
+            && back.orientation.w == 1.0
+            && back.orientation_covariance == cov
+            && back.angular_velocity.z == 0.3
+            && back.linear_acceleration.x == 9.8
+            && back.linear_acceleration_covariance[8] == 0.3;
+        let reser = back.to_cdr(Endian::Little);
+        println!("{} {}", ok, reser == bytes);
+        let mut m = m;
+        m.fini();
+        back.fini();
+    }
+    "#;
+    let out = run_generated(
+        &[
+            (
+                "geometry_msgs",
+                "Quaternion",
+                "float64 x\nfloat64 y\nfloat64 z\nfloat64 w\n",
+            ),
+            (
+                "geometry_msgs",
+                "Vector3",
+                "float64 x\nfloat64 y\nfloat64 z\n",
+            ),
+            ("sensor_msgs", "Imu", imu),
+        ],
+        body,
+        "imu",
+    );
+    assert_eq!(out.trim(), "true true");
+}
+
+#[test]
+fn hostile_sequence_length_errors_without_aborting() {
+    // A tiny packet claiming a 0xFFFFFFFF-element sequence must fail cleanly,
+    // not pre-allocate a multi-GB Vec and abort. If decoding aborted, the
+    // generated binary would exit non-zero and `run_generated` would panic.
+    let body = r#"
+    // LE encapsulation header, then seq_len = 0xFFFFFFFF, then no payload.
+    let bytes: [u8; 8] = [0x00, 0x01, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF];
+    let got = matches!(demo_msgs__Readings::from_cdr(&bytes), Err(CdrError::Truncated));
+    println!("{got}");
+    "#;
+    let out = run_generated(
+        &[("demo_msgs", "Readings", "int32[] values\n")],
+        body,
+        "hostile_seq",
+    );
+    assert_eq!(out.trim(), "true");
+}

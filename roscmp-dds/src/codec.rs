@@ -2,8 +2,9 @@
 //! traits, plus the ROS2 naming conventions a vanilla node expects.
 //!
 //! RustDDS owns the RTPS protocol; the *payload* is encoded/decoded entirely by
-//! our generated `to_cdr`/`from_cdr` (M2). A message participates by
-//! implementing [`CdrMsg`] (one line via [`impl_cdr!`]).
+//! our generated `to_cdr`/`from_cdr` (M2). Every generated message implements
+//! [`CdrMsg`] automatically — the compiler emits the impl (and the ROS2 DDS type
+//! name) when run with `--dds` (see `codegen::rust::generate_dds`).
 
 use std::marker::PhantomData;
 
@@ -32,6 +33,43 @@ pub trait CdrMsg: 'static + Sized {
     /// Decode a full CDR message (header + body).
     fn decode(buf: &[u8]) -> Result<Self, CodecError>;
 }
+
+/// Implements `to_cdr`/`from_cdr` and [`CdrMsg`] for a hand-written message type.
+///
+/// `$ty` must already provide `serialize_into`/`deserialize_from`. `serialize_into`
+/// only reads the value (via the safe `RosString`/`RosSequence` accessors), so it
+/// is a safe fn. `Endian`, `Reader`, `Writer` and `CdrError` must be in scope at
+/// the call site.
+macro_rules! impl_cdr_msg {
+    ($ty:ty, $type_name:expr, $decode_error:expr) => {
+        impl $ty {
+            #[must_use]
+            pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
+                let mut w = Writer::new(endian);
+                self.serialize_into(&mut w);
+                w.finish()
+            }
+
+            pub fn from_cdr(buf: &[u8]) -> Result<Self, CdrError> {
+                let mut r = Reader::new(buf)?;
+                Self::deserialize_from(&mut r)
+            }
+        }
+
+        impl CdrMsg for $ty {
+            const TYPE_NAME: &'static str = $type_name;
+
+            fn encode(&self) -> Vec<u8> {
+                self.to_cdr(Endian::Little)
+            }
+
+            fn decode(buf: &[u8]) -> Result<Self, CodecError> {
+                Self::from_cdr(buf).map_err(|_| CodecError($decode_error))
+            }
+        }
+    };
+}
+pub(crate) use impl_cdr_msg;
 
 /// ROS2 topic-name mangling: `/chatter` -> DDS `rt/chatter`.
 pub fn topic(ros_name: &str) -> String {
@@ -107,30 +145,4 @@ impl<T: CdrMsg> DefaultDecoder<T> for De<T> {
     const DECODER: Dec<T> = Dec(PhantomData);
 }
 
-/// Implement [`CdrMsg`] for a generated type with its ROS2 DDS type name.
-#[macro_export]
-macro_rules! impl_cdr {
-    ($t:ident, $name:literal) => {
-        impl $crate::codec::CdrMsg for $crate::msgs::$t {
-            const TYPE_NAME: &'static str = $name;
-            fn encode(&self) -> Vec<u8> {
-                self.to_cdr($crate::msgs::Endian::Little)
-            }
-            fn decode(buf: &[u8]) -> Result<Self, $crate::codec::CodecError> {
-                Self::from_cdr(buf).map_err(|_| $crate::codec::CodecError("cdr decode failed"))
-            }
-        }
-    };
-}
-
-impl_cdr!(std_msgs__String, "std_msgs::msg::dds_::String_");
-impl_cdr!(geometry_msgs__Twist, "geometry_msgs::msg::dds_::Twist_");
-impl_cdr!(
-    example_interfaces__AddTwoInts_Request,
-    "example_interfaces::srv::dds_::AddTwoInts_Request_"
-);
-impl_cdr!(
-    example_interfaces__AddTwoInts_Response,
-    "example_interfaces::srv::dds_::AddTwoInts_Response_"
-);
-impl_cdr!(turtlesim__Pose, "turtlesim::msg::dds_::Pose_");
+// `CdrMsg` impls are emitted by the compiler into `msgs.rs` (run with `--dds`).

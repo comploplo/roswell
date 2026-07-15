@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_next_fire_after": { "prover": "alt-ergo", "time": 0.019 },
+      "vc_saturating_add": { "prover": "alt-ergo", "time": 0.014 }
+    }
+  }
+}

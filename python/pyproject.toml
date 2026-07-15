@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.18", "packaging"]
+build-backend = "hatchling.build"
+
+[project]
+name = "roscmp"
+dynamic = ["version"]
+description = "pip-installable Python that speaks ROS2 (RTPS/DDS) with zero ROS installation"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT OR Apache-2.0" }
+authors = [{ name = "roscmp" }]
+keywords = ["ros2", "dds", "rtps", "robotics"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
+
+# Pure-Python + stdlib ctypes. numpy is optional (enables zero-copy array views).
+dependencies = []
+
+[project.optional-dependencies]
+numpy = ["numpy>=1.21"]
+test = ["numpy>=1.21", "pytest>=7"]
+
+# Single-source the version from the crate (roscmp-c/Cargo.toml).
+[tool.hatch.version]
+path = "../roscmp-c/Cargo.toml"
+pattern = 'version = "(?P<version>[^"]+)"'
+
+[tool.hatch.build.targets.wheel]
+packages = ["roscmp"]
+# The cdylib and bundled interfaces are injected by the build hook (force_include);
+# these patterns let hatchling ship them if they already exist in the tree.
+artifacts = ["roscmp/_lib/*", "roscmp/interfaces/**/*"]
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["roscmp", "hatch_build.py", "README.md"]

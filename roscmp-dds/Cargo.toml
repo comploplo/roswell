@@ -7,9 +7,32 @@ publish = false
 
 [dependencies]
 rustdds = "0.11"
+# Same mio 0.8 that rustdds registers its DataReaders against: the executor
+# waitset registers reader/service/clock event sources and blocks on Poll.
+mio = { version = "0.8", features = ["net", "os-poll"] }
 bytes = "1"
+quick-xml = "0.37"
+ruzstd = "0.8"
+lz4_flex = "0.13"
 ratatui = "0.29"
 crossterm = "0.28"
+serialport = { version = "4", optional = true }
+# Machine-checked pure cores (Creusot): timer scheduling + tunnel queue policy
+# delegate here. Tiny in-workspace crate, no external deps. See docs/RT.md.
+roscmp-verify = { path = "../roscmp-verify", version = "0.1.0" }
+
+[dev-dependencies]
+# Internal workspace crate (the compiler/runtime core). Used by the
+# byte-equality tests to drive `roscmp::dynamic` against the generated `msgs`.
+roscmp = { path = ".." }
+
+[features]
+serial = ["dep:serialport"]
+
+[[bin]]
+name = "usb_topic_bridge"
+path = "src/bin/usb_topic_bridge.rs"
+required-features = ["serial"]
 
 [lints]
 workspace = true

@@ -32,9 +32,22 @@ struct Cursor {
 impl Cursor {
     /// Bytes needed to align `pos` to `a` relative to the body origin.
     fn padding(self, pos: usize, a: usize) -> usize {
-        let off = pos - self.origin;
-        (a - (off % a)) % a
+        pad_to(pos - self.origin, a)
     }
+}
+
+/// Padding bytes to advance an offset `off` (measured from the alignment
+/// origin) up to the next multiple of `a`. `a` is always a CDR primitive
+/// alignment (1, 2, 4, or 8) — a nonzero power of two — at every call site.
+///
+/// This is the exact formula machine-checked (Creusot) as
+/// `roscmp_verify::pad_to`: given `a > 0` it never panics (no
+/// division-by-zero, no underflow in `a - off % a`), the result is strictly
+/// less than `a`, and `off + result` is an exact multiple of `a`. The embedded
+/// copy here is held identical by `cdr::tests::pad_to_matches_verified_core`.
+/// See `docs/RT.md`.
+fn pad_to(off: usize, a: usize) -> usize {
+    (a - (off % a)) % a
 }
 
 /// Serializes values into a CDR byte buffer.
@@ -282,7 +295,16 @@ impl<'a> Reader<'a> {
     }
 
     /// Read a sequence length prefix (`uint32` element count).
+    ///
+    /// The count is validated against the bytes actually left in the buffer
+    /// (every element occupies at least one wire byte, even an empty nested
+    /// message, which CDR encodes as a dummy octet) — so a malformed prefix
+    /// cannot drive an attacker-sized allocation in any decode path.
     pub fn read_seq_len(&mut self) -> Result<usize, CdrError> {
-        Ok(self.read_u32()? as usize)
+        let n = self.read_u32()? as usize;
+        if n > self.buf.len() - self.pos {
+            return Err(CdrError::Truncated);
+        }
+        Ok(n)
     }
 }

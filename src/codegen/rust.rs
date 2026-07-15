@@ -1,6 +1,8 @@
 //! Rust backend: `#[repr(C)]` structs over the shared ABI, plus generated CDR
 //! serialize/deserialize and an owning `fini` for each message.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use super::symbol;
 use crate::ir::*;
 
@@ -9,6 +11,17 @@ const CDR_RUNTIME: &str = include_str!("../cdr_runtime.rs");
 
 /// Generate a single self-contained Rust source file for the whole program.
 pub fn generate(program: &Program) -> String {
+    generate_inner(program, false)
+}
+
+/// Like [`generate`], but also emits a `crate::codec::CdrMsg` impl per message so
+/// the output can ride RTPS in `roscmp-dds`. Not self-contained: it references
+/// `crate::codec`, so it only compiles inside that crate.
+pub fn generate_dds(program: &Program) -> String {
+    generate_inner(program, true)
+}
+
+fn generate_inner(program: &Program, dds: bool) -> String {
     let mut out = String::new();
     out.push_str(PREAMBLE);
     out.push_str(CDR_RUNTIME);
@@ -18,6 +31,13 @@ pub fn generate(program: &Program) -> String {
         out.push('\n');
         let hash = crate::typehash::type_hash(&program.messages, &msg.id);
         emit_message(&mut out, msg, hash.as_deref());
+        if dds {
+            emit_cdr_msg(&mut out, msg);
+            emit_action_msg_traits(&mut out, msg);
+        }
+    }
+    if dds {
+        emit_type_description_registry(&mut out, program);
     }
     out
 }
@@ -32,23 +52,42 @@ use core::ffi::c_char;
 /// `RosString`/`RosSequence` definitions and their owning helpers. These ride
 /// the same `{ data, size, capacity }` ABI used by the C and Python backends.
 const ROS_TYPES: &str = "
-/// ABI of a ROS string: NUL-terminated, owning pointer + length + capacity.
+/// ABI of a ROS string: NUL-terminated pointer + length + capacity.
+///
+/// # Invariant
+/// A `RosString` is always readable: either `size == 0` (and `data` is ignored),
+/// or `data` points to `size` initialized, valid-UTF-8 bytes. The fields are
+/// **private**, so only three paths construct a value and each upholds this:
+/// - `alloc` and CDR decode produce the **owned** form: `data` is an allocation of
+///   `capacity` bytes holding the `size` UTF-8 bytes plus a NUL (`size < capacity`),
+///   which `free` may later reclaim.
+/// - `from_raw_parts` (unsafe) rebuilds a value from a raw triple — the caller
+///   discharges the invariant. The crate's zero-copy `borrowed_*` helpers use it
+///   to make a **borrowed** value (`capacity == 0`, `data` owned elsewhere).
+///
+/// The `#[repr(C)]` layout is unchanged, so C/Python still read the triple by
+/// offset across the ABI; Rust privacy only bars safe Rust from forging one. That
+/// makes the read accessor `as_str` genuinely sound; `free` (ownership) stays
+/// `unsafe`.
 #[repr(C)]
 pub struct RosString {
-    pub data: *mut c_char,
-    pub size: usize,
-    pub capacity: usize,
+    data: *mut c_char,
+    size: usize,
+    capacity: usize,
 }
 
 impl RosString {
-    /// # Safety
-    /// `data` must point to `size` valid UTF-8 bytes.
-    pub unsafe fn as_str(&self) -> &str {
+    /// Borrow the string contents. Sound because the private fields keep the type
+    /// invariant: `data` points to `size` valid UTF-8 bytes (or the empty form).
+    pub fn as_str(&self) -> &str {
         if self.data.is_null() || self.size == 0 {
             return \"\";
         }
-        let bytes = core::slice::from_raw_parts(self.data as *const u8, self.size);
-        core::str::from_utf8_unchecked(bytes)
+        // SAFETY: by the type invariant, `data` points to `size` valid UTF-8 bytes.
+        unsafe {
+            let bytes = core::slice::from_raw_parts(self.data as *const u8, self.size);
+            core::str::from_utf8_unchecked(bytes)
+        }
     }
 
     /// Allocate an owning, NUL-terminated copy of `s`.
@@ -63,8 +102,27 @@ impl RosString {
         }
     }
 
+    /// Rebuild a `RosString` from its raw ABI triple.
+    ///
     /// # Safety
-    /// Frees the owned buffer; call at most once. Idempotent on null.
+    /// The caller must uphold the type invariant: either `size == 0`, or `data`
+    /// points to `size` initialized, valid-UTF-8 bytes that stay live for every
+    /// read of the returned value. If `capacity > 0`, `data` must be a single
+    /// allocation of `capacity` bytes (as produced by `alloc`) so that `free`
+    /// can reclaim it; `capacity == 0` marks a borrowed value that must not be
+    /// freed and whose backing must outlive it.
+    pub unsafe fn from_raw_parts(data: *mut c_char, size: usize, capacity: usize) -> Self {
+        RosString {
+            data,
+            size,
+            capacity,
+        }
+    }
+
+    /// # Safety
+    /// Frees the owned buffer, transferring ownership out of `self`; call at most
+    /// once per owned value (double-free discipline is the caller's). Idempotent
+    /// on null.
     pub unsafe fn free(&mut self) {
         if !self.data.is_null() {
             drop(Vec::from_raw_parts(self.data as *mut u8, self.capacity, self.capacity));
@@ -75,22 +133,47 @@ impl RosString {
     }
 }
 
-/// ABI of a ROS sequence: owning pointer + length + capacity.
+/// ABI of a ROS sequence: pointer + length + capacity.
+///
+/// # Invariant
+/// A `RosSequence<T>` is always readable: either `size == 0` (and no element is
+/// read), or `data` points to `size` initialized `T` values. The fields are
+/// **private**, so only three paths construct a value and each upholds this:
+/// `alloc` and CDR decode produce the **owned** form (`data` is an allocation of
+/// `capacity` `T`, `size <= capacity`, which `into_vec` may reclaim, and the
+/// empty form uses a dangling-but-aligned `data`); `from_raw_parts` (unsafe)
+/// rebuilds a value from a raw triple with the caller discharging the invariant.
+///
+/// The `#[repr(C)]` layout is unchanged, so C/Python still read the triple by
+/// offset across the ABI; Rust privacy only bars safe Rust from forging one. That
+/// makes the read accessor `as_slice` genuinely sound; `into_vec` (ownership)
+/// stays `unsafe`.
 #[repr(C)]
 pub struct RosSequence<T> {
-    pub data: *mut T,
-    pub size: usize,
-    pub capacity: usize,
+    data: *mut T,
+    size: usize,
+    capacity: usize,
 }
 
 impl<T> RosSequence<T> {
-    /// # Safety
-    /// `data` must point to `size` valid `T` values.
-    pub unsafe fn as_slice(&self) -> &[T] {
+    /// Borrow the sequence contents. Sound because the private fields keep the
+    /// type invariant: `data` points to `size` valid `T` values (or the empty form).
+    pub fn as_slice(&self) -> &[T] {
         if self.data.is_null() {
             return &[];
         }
-        core::slice::from_raw_parts(self.data, self.size)
+        // SAFETY: by the type invariant, `data` points to `size` valid `T` values.
+        unsafe { core::slice::from_raw_parts(self.data, self.size) }
+    }
+
+    /// Number of elements in the sequence.
+    pub fn len(&self) -> usize {
+        self.size
+    }
+
+    /// Whether the sequence has no elements.
+    pub fn is_empty(&self) -> bool {
+        self.size == 0
     }
 
     /// Take ownership of `v`'s buffer.
@@ -103,8 +186,24 @@ impl<T> RosSequence<T> {
         }
     }
 
+    /// Rebuild a `RosSequence` from its raw ABI triple.
+    ///
     /// # Safety
-    /// Reconstitutes the owning `Vec`; call at most once.
+    /// The caller must uphold the type invariant: either `size == 0`, or `data`
+    /// points to `size` initialized `T` values that stay live for every read of
+    /// the returned value. If reclaimed via `into_vec`, `data`/`capacity` must be
+    /// a single allocation of `capacity` `T` (as produced by `alloc`).
+    pub unsafe fn from_raw_parts(data: *mut T, size: usize, capacity: usize) -> Self {
+        RosSequence {
+            data,
+            size,
+            capacity,
+        }
+    }
+
+    /// # Safety
+    /// Reconstitutes the owning `Vec`, transferring ownership out of `self`; call
+    /// at most once per owned value (double-free discipline is the caller's).
     pub unsafe fn into_vec(self) -> Vec<T> {
         Vec::from_raw_parts(self.data, self.size, self.capacity)
     }
@@ -115,11 +214,15 @@ impl<T> RosSequence<T> {
 /// This is the only allocation handoff between Rust and the other languages.
 const FFI_RUNTIME: &str = "
 /// Owned byte buffer returned across the FFI boundary.
+///
+/// Fields are private on the Rust side (built only by the `*_serialize` wrappers,
+/// reclaimed only by `roscmp_buf_free`); the `#[repr(C)]` layout is unchanged, so
+/// C reads `ptr`/`len`/`cap` by offset.
 #[repr(C)]
 pub struct RoscmpBuf {
-    pub ptr: *mut u8,
-    pub len: usize,
-    pub cap: usize,
+    ptr: *mut u8,
+    len: usize,
+    cap: usize,
 }
 
 /// Free a buffer produced by a `*_serialize` call.
@@ -157,12 +260,308 @@ fn emit_message(out: &mut String, msg: &Message, type_hash: Option<&str>) {
     out.push_str("#[repr(C)]\n");
     out.push_str(&format!("pub struct {name} {{\n"));
     for f in &msg.fields {
-        out.push_str(&format!("    pub {}: {},\n", f.name, render_type(&f.ty)));
+        out.push_str(&format!(
+            "    pub {}: {},\n",
+            field_ident(&f.name),
+            render_type(&f.ty)
+        ));
     }
     out.push_str("}\n");
 
     emit_cdr(out, msg, &name);
     emit_ffi(out, &name);
+}
+
+/// Emit the `crate::codec::CdrMsg` impl that lets `roscmp-dds` transport this
+/// type over RTPS (replaces the hand-written `impl_cdr!` registrations).
+fn emit_cdr_msg(out: &mut String, msg: &Message) {
+    let name = symbol(&msg.id);
+    let type_name = dds_type_name(&msg.id);
+    out.push_str(&format!(
+        "
+impl crate::codec::CdrMsg for {name} {{
+    const TYPE_NAME: &'static str = {type_name:?};
+    fn encode(&self) -> Vec<u8> {{ self.to_cdr(Endian::Little) }}
+    fn decode(buf: &[u8]) -> Result<Self, crate::codec::CodecError> {{
+        Self::from_cdr(buf).map_err(|_| crate::codec::CodecError(\"cdr decode failed\"))
+    }}
+}}
+"
+    ));
+}
+
+fn emit_action_msg_traits(out: &mut String, msg: &Message) {
+    let name = symbol(&msg.id);
+    if let Some(action) = msg.id.name.strip_suffix("_SendGoal_Request") {
+        let goal = symbol(&MsgId::new(&msg.id.package, format!("{action}_Goal")));
+        out.push_str(&format!(
+            "
+impl crate::action::SendGoalRequest for {name} {{
+    type Goal = {goal};
+
+    fn goal_id(&self) -> crate::action::GoalId {{
+        crate::action::GoalId(self.goal_id.uuid)
+    }}
+
+    fn goal(&self) -> &Self::Goal {{
+        &self.goal
+    }}
+}}
+"
+        ));
+    } else if msg.id.name.ends_with("_SendGoal_Response") {
+        out.push_str(&format!(
+            "
+impl crate::action::SendGoalResponse for {name} {{
+    fn new(accepted: bool, stamp: crate::time::Time) -> Self {{
+        Self {{ accepted, stamp: stamp.to_msg() }}
+    }}
+}}
+"
+        ));
+    } else if msg.id.name.ends_with("_GetResult_Request") {
+        out.push_str(&format!(
+            "
+impl crate::action::GetResultRequest for {name} {{
+    fn goal_id(&self) -> crate::action::GoalId {{
+        crate::action::GoalId(self.goal_id.uuid)
+    }}
+}}
+"
+        ));
+    } else if let Some(action) = msg.id.name.strip_suffix("_GetResult_Response") {
+        let result = symbol(&MsgId::new(&msg.id.package, format!("{action}_Result")));
+        out.push_str(&format!(
+            "
+impl crate::action::GetResultResponse for {name} {{
+    type Result = {result};
+
+    fn new(status: crate::action::GoalStatus, result: Self::Result) -> Self {{
+        Self {{ status: status as i8, result }}
+    }}
+}}
+"
+        ));
+    } else if let Some(action) = msg.id.name.strip_suffix("_FeedbackMessage") {
+        let feedback = symbol(&MsgId::new(&msg.id.package, format!("{action}_Feedback")));
+        out.push_str(&format!(
+            "
+impl crate::action::FeedbackMessage for {name} {{
+    type Feedback = {feedback};
+
+    fn new(goal_id: crate::action::GoalId, feedback: Self::Feedback) -> Self {{
+        Self {{
+            goal_id: unique_identifier_msgs__UUID {{ uuid: goal_id.0 }},
+            feedback,
+        }}
+    }}
+}}
+"
+        ));
+    }
+}
+
+/// The ROS2 DDS type string for a message, e.g. `std_msgs::msg::dds_::String_`.
+///
+/// The sub-namespace is inferred from the rosidl naming convention: service
+/// request/response and action goal/result/feedback types carry reserved
+/// suffixes, everything else is a plain message.
+fn dds_type_name(id: &MsgId) -> String {
+    let ns = if id.name.contains("_SendGoal_")
+        || id.name.contains("_GetResult_")
+        || id.name.ends_with("_Goal")
+        || id.name.ends_with("_Result")
+        || id.name.ends_with("_Feedback")
+        || id.name.ends_with("_FeedbackMessage")
+    {
+        "action"
+    } else if id.name.ends_with("_Request") || id.name.ends_with("_Response") {
+        "srv"
+    } else {
+        "msg"
+    };
+    format!("{}::{ns}::dds_::{}_", id.package, id.name)
+}
+
+fn emit_type_description_registry(out: &mut String, program: &Program) {
+    out.push_str(
+        "
+pub fn register_type_descriptions(registry: &mut crate::type_description::TypeDescriptionRegistry) {
+",
+    );
+    let map: BTreeMap<_, _> = program.messages.iter().map(|m| (&m.id, m)).collect();
+    for msg in &program.messages {
+        let hash = crate::typehash::type_hash(&program.messages, &msg.id).unwrap_or_default();
+        out.push_str("    registry.insert(crate::type_description::TypeDescriptionData {\n");
+        out.push_str(&format!("        type_hash: {hash:?}.to_string(),\n"));
+        out.push_str("        type_description: ");
+        emit_individual_type_description(out, msg, 8);
+        out.push_str(",\n");
+        out.push_str("        referenced_type_descriptions: vec![\n");
+        for dep in transitive_deps(msg, &map) {
+            if let Some(dep_msg) = map.get(&dep) {
+                emit_indent(out, 12);
+                emit_individual_type_description(out, dep_msg, 12);
+                out.push_str(",\n");
+            }
+        }
+        out.push_str("        ],\n");
+        out.push_str("        type_sources: vec![crate::type_description::TypeSourceData {\n");
+        out.push_str(&format!(
+            "            type_name: {:?}.to_string(),\n",
+            full_type_name(&msg.id)
+        ));
+        out.push_str("            encoding: \"implicit\".to_string(),\n");
+        out.push_str("            raw_file_contents: String::new(),\n");
+        out.push_str("        }],\n");
+        out.push_str("        extra_information: Vec::new(),\n");
+        out.push_str("    });\n");
+    }
+    out.push_str("}\n");
+}
+
+fn emit_individual_type_description(out: &mut String, msg: &Message, indent: usize) {
+    out.push_str("crate::type_description::IndividualTypeDescriptionData {\n");
+    emit_indent(out, indent + 4);
+    out.push_str(&format!(
+        "type_name: {:?}.to_string(),\n",
+        full_type_name(&msg.id)
+    ));
+    emit_indent(out, indent + 4);
+    out.push_str("fields: vec![\n");
+    for field in &msg.fields {
+        let (type_id, capacity, string_capacity, nested_type_name) = field_type_props(&field.ty);
+        emit_indent(out, indent + 8);
+        out.push_str("crate::type_description::FieldData {\n");
+        emit_indent(out, indent + 12);
+        out.push_str(&format!("name: {:?}.to_string(),\n", field.name));
+        emit_indent(out, indent + 12);
+        out.push_str(&format!("type_id: {type_id},\n"));
+        emit_indent(out, indent + 12);
+        out.push_str(&format!("capacity: {capacity},\n"));
+        emit_indent(out, indent + 12);
+        out.push_str(&format!("string_capacity: {string_capacity},\n"));
+        emit_indent(out, indent + 12);
+        out.push_str(&format!(
+            "nested_type_name: {nested_type_name:?}.to_string(),\n"
+        ));
+        emit_indent(out, indent + 12);
+        out.push_str("default_value: String::new(),\n");
+        emit_indent(out, indent + 8);
+        out.push_str("},\n");
+    }
+    emit_indent(out, indent + 4);
+    out.push_str("],\n");
+    emit_indent(out, indent);
+    out.push('}');
+}
+
+fn transitive_deps(msg: &Message, map: &BTreeMap<&MsgId, &Message>) -> Vec<MsgId> {
+    let mut seen = BTreeSet::new();
+    let mut refs = BTreeMap::new();
+    seen.insert(msg.id.clone());
+    collect_deps(msg, map, &mut seen, &mut refs);
+    refs.into_values().collect()
+}
+
+fn collect_deps(
+    msg: &Message,
+    map: &BTreeMap<&MsgId, &Message>,
+    seen: &mut BTreeSet<MsgId>,
+    refs: &mut BTreeMap<String, MsgId>,
+) {
+    for field in &msg.fields {
+        if let Some(id) = nested_id(&field.ty)
+            && seen.insert(id.clone())
+            && let Some(dep) = map.get(&id)
+        {
+            refs.insert(full_type_name(&id), id.clone());
+            collect_deps(dep, map, seen, refs);
+        }
+    }
+}
+
+fn nested_id(ty: &ResolvedType) -> Option<MsgId> {
+    let elem = match ty {
+        ResolvedType::Scalar(e)
+        | ResolvedType::Array { elem: e, .. }
+        | ResolvedType::Sequence { elem: e, .. } => e,
+    };
+    match elem {
+        Element::Message(id) => Some(id.clone()),
+        _ => None,
+    }
+}
+
+fn full_type_name(id: &MsgId) -> String {
+    format!("{}/{}/{}", id.package, ros_subnamespace(&id.name), id.name)
+}
+
+fn ros_subnamespace(name: &str) -> &'static str {
+    if name.contains("_SendGoal_")
+        || name.contains("_GetResult_")
+        || name.ends_with("_Goal")
+        || name.ends_with("_Result")
+        || name.ends_with("_Feedback")
+        || name.ends_with("_FeedbackMessage")
+    {
+        "action"
+    } else if name.ends_with("_Request") || name.ends_with("_Response") {
+        "srv"
+    } else {
+        "msg"
+    }
+}
+
+fn field_type_props(ty: &ResolvedType) -> (u8, u64, u64, String) {
+    let (elem, offset, capacity) = match ty {
+        ResolvedType::Scalar(e) => (e, 0, 0),
+        ResolvedType::Array { elem, len } => (elem, 48, *len as u64),
+        ResolvedType::Sequence {
+            elem,
+            bound: Some(n),
+        } => (elem, 96, *n as u64),
+        ResolvedType::Sequence { elem, bound: None } => (elem, 144, 0),
+    };
+    let (base, string_capacity, nested) = base_props(elem);
+    (base + offset, capacity, string_capacity, nested)
+}
+
+fn base_props(elem: &Element) -> (u8, u64, String) {
+    match elem {
+        Element::Prim(p) => (prim_id(*p), 0, String::new()),
+        Element::String { bound: None, wide } => (if *wide { 18 } else { 17 }, 0, String::new()),
+        Element::String {
+            bound: Some(n),
+            wide,
+        } => (if *wide { 22 } else { 21 }, *n as u64, String::new()),
+        Element::Message(id) => (1, 0, full_type_name(id)),
+    }
+}
+
+fn prim_id(p: Prim) -> u8 {
+    use Prim::*;
+    match p {
+        Int8 => 2,
+        Uint8 => 3,
+        Int16 => 4,
+        Uint16 => 5,
+        Int32 => 6,
+        Uint32 => 7,
+        Int64 => 8,
+        Uint64 => 9,
+        Float32 => 10,
+        Float64 => 11,
+        Char => 13,
+        Bool => 15,
+        Byte => 16,
+    }
+}
+
+fn emit_indent(out: &mut String, n: usize) {
+    for _ in 0..n {
+        out.push(' ');
+    }
 }
 
 /// Emit `extern "C"` wrappers so C and Python serialize through this one Rust
@@ -204,13 +603,15 @@ fn emit_cdr(out: &mut String, msg: &Message, name: &str) {
     out.push_str(
         "    pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {\n\
          \x20       let mut w = Writer::new(endian);\n\
-         \x20       unsafe { self.serialize_into(&mut w); }\n\
+         \x20       self.serialize_into(&mut w);\n\
          \x20       w.finish()\n\
          \x20   }\n\n",
     );
 
-    out.push_str("    /// # Safety\n    /// Reads owning pointers in strings/sequences; they must be valid.\n");
-    out.push_str("    pub unsafe fn serialize_into(&self, w: &mut Writer) {\n");
+    let w_param = if msg.fields.is_empty() { "_w" } else { "w" };
+    out.push_str(&format!(
+        "    pub fn serialize_into(&self, {w_param}: &mut Writer) {{\n"
+    ));
     for f in &msg.fields {
         out.push_str(&ser_field(f));
     }
@@ -223,10 +624,17 @@ fn emit_cdr(out: &mut String, msg: &Message, name: &str) {
          \x20   }\n\n",
     );
 
-    out.push_str("    pub fn deserialize_from(r: &mut Reader) -> Result<Self, CdrError> {\n");
+    let r_param = if msg.fields.is_empty() { "_r" } else { "r" };
+    out.push_str(&format!(
+        "    pub fn deserialize_from({r_param}: &mut Reader) -> Result<Self, CdrError> {{\n"
+    ));
     out.push_str("        Ok(Self {\n");
     for f in &msg.fields {
-        out.push_str(&format!("            {}: {},\n", f.name, de_field(f)));
+        out.push_str(&format!(
+            "            {}: {},\n",
+            field_ident(&f.name),
+            de_field(f)
+        ));
     }
     out.push_str("        })\n    }\n\n");
 
@@ -242,12 +650,28 @@ fn emit_cdr(out: &mut String, msg: &Message, name: &str) {
     out.push_str("}\n");
 }
 
+/// A field name as a Rust identifier, raw-escaping the reserved words a ROS
+/// field can legally collide with (e.g. `type` in `type_description_interfaces`).
+fn field_ident(name: &str) -> String {
+    const KEYWORDS: &[&str] = &[
+        "as", "break", "const", "continue", "dyn", "else", "enum", "extern", "false", "fn", "for",
+        "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
+        "static", "struct", "trait", "true", "type", "union", "unsafe", "use", "where", "while",
+        "async", "await", "box", "yield",
+    ];
+    if KEYWORDS.contains(&name) {
+        format!("r#{name}")
+    } else {
+        name.to_string()
+    }
+}
+
 // ---- serialize ----------------------------------------------------------
 
 fn ser_field(f: &ResolvedField) -> String {
-    let name = &f.name;
+    let name = field_ident(&f.name);
     match &f.ty {
-        ResolvedType::Scalar(e) => format!("        {}\n", ser_scalar(e, name)),
+        ResolvedType::Scalar(e) => format!("        {}\n", ser_scalar(e, &name)),
         ResolvedType::Array { elem, .. } => format!(
             "        for __e in &self.{name} {{ {} }}\n",
             ser_elem_ref(elem)
@@ -288,14 +712,15 @@ fn de_field(f: &ResolvedField) -> String {
             de_elem(elem)
         ),
         ResolvedType::Sequence { elem, .. } => format!(
-            "{{ let __n = r.read_seq_len()?; let mut __v = Vec::with_capacity(__n); \
-             for _ in 0..__n {{ __v.push({}); }} RosSequence::alloc(__v) }}",
-            de_elem(elem)
+            "{{ let __n = r.read_seq_len()?; \
+             let __v = (0..__n).map(|_| {}).collect::<Result<Vec<_>, _>>()?; \
+             RosSequence::alloc(__v) }}",
+            de_elem_result(elem)
         ),
     }
 }
 
-/// Read one element value.
+/// Read one element value (returns the decoded value; propagates errors with `?`).
 fn de_elem(e: &Element) -> String {
     match e {
         Element::Prim(p) => format!("r.read_{}()?", p.cdr_fn()),
@@ -304,10 +729,23 @@ fn de_elem(e: &Element) -> String {
     }
 }
 
+/// Read one element as a `Result`, for `map`/`collect` sequence decoding.
+///
+/// The shunt iterator reports a zero lower-bound size hint, so the collected
+/// `Vec` grows only as elements actually decode — an attacker-supplied length
+/// prefix cannot force a giant up-front allocation.
+fn de_elem_result(e: &Element) -> String {
+    match e {
+        Element::Prim(p) => format!("r.read_{}()", p.cdr_fn()),
+        Element::String { .. } => "r.read_string().map(|__s| RosString::alloc(&__s))".to_string(),
+        Element::Message(id) => format!("{}::deserialize_from(r)", symbol(id)),
+    }
+}
+
 // ---- fini ---------------------------------------------------------------
 
 fn fini_field(f: &ResolvedField) -> String {
-    let name = &f.name;
+    let name = field_ident(&f.name);
     match &f.ty {
         ResolvedType::Scalar(e) => match fini_elem(e, &format!("self.{name}")) {
             Some(stmt) => format!("        {stmt}\n"),

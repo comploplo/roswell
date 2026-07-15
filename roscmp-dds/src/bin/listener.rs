@@ -4,19 +4,19 @@
 use std::time::Duration;
 
 use roscmp_dds::msgs::std_msgs__String;
-use roscmp_dds::transport::{Dds, MsgSubscriber, Transport};
+use roscmp_dds::transport::{Dds, MsgSubscriber, Qos, Transport};
 
 fn main() {
     let dds = Dds::new(0);
-    let mut sub = dds.subscriber::<std_msgs__String>("/chatter");
+    let mut sub = dds.subscriber::<std_msgs__String>("/chatter", Qos::Default);
 
     println!("listener: waiting on /chatter (std_msgs/msg/String)");
     let mut count = 0;
     for _ in 0..300 {
         while let Some(mut msg) = sub.take() {
-            // SAFETY: `data` was allocated by our from_cdr; valid until fini.
+            println!("received: {}", msg.data.as_str());
+            // SAFETY: `msg` owns `data` (from our from_cdr) and is finalized once here.
             unsafe {
-                println!("received: {}", msg.data.as_str());
                 msg.fini();
             }
             count += 1;

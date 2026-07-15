@@ -32,18 +32,41 @@ pub fn service_messages(package: &str, name: &str, svc: &ServiceSpec) -> Vec<(Ms
 
 /// Expand an action into its `_Goal`/`_Result`/`_Feedback` messages.
 pub fn action_messages(package: &str, name: &str, act: &ActionSpec) -> Vec<(MsgId, MessageSpec)> {
+    let goal = format!("{name}_Goal");
+    let result = format!("{name}_Result");
+    let feedback = format!("{name}_Feedback");
     vec![
+        (MsgId::new(package, goal.clone()), act.goal.clone()),
+        (MsgId::new(package, result.clone()), act.result.clone()),
+        (MsgId::new(package, feedback.clone()), act.feedback.clone()),
         (
-            MsgId::new(package, format!("{name}_Goal")),
-            act.goal.clone(),
+            MsgId::new(package, format!("{name}_SendGoal_Request")),
+            crate::parse_message(&format!(
+                "unique_identifier_msgs/UUID goal_id\n{package}/{goal} goal\n"
+            ))
+            .expect("internal action SendGoal request parses"),
         ),
         (
-            MsgId::new(package, format!("{name}_Result")),
-            act.result.clone(),
+            MsgId::new(package, format!("{name}_SendGoal_Response")),
+            crate::parse_message("bool accepted\nbuiltin_interfaces/Time stamp\n")
+                .expect("internal action SendGoal response parses"),
         ),
         (
-            MsgId::new(package, format!("{name}_Feedback")),
-            act.feedback.clone(),
+            MsgId::new(package, format!("{name}_GetResult_Request")),
+            crate::parse_message("unique_identifier_msgs/UUID goal_id\n")
+                .expect("internal action GetResult request parses"),
+        ),
+        (
+            MsgId::new(package, format!("{name}_GetResult_Response")),
+            crate::parse_message(&format!("int8 status\n{package}/{result} result\n"))
+                .expect("internal action GetResult response parses"),
+        ),
+        (
+            MsgId::new(package, format!("{name}_FeedbackMessage")),
+            crate::parse_message(&format!(
+                "unique_identifier_msgs/UUID goal_id\n{package}/{feedback} feedback\n"
+            ))
+            .expect("internal action feedback message parses"),
         ),
     ]
 }
@@ -67,6 +90,7 @@ const BUILTINS: &[(&str, &str, &str)] = &[
         "Duration",
         "int32 sec\nuint32 nanosec\n",
     ),
+    ("unique_identifier_msgs", "UUID", "uint8[16] uuid\n"),
     (
         "std_msgs",
         "Header",
