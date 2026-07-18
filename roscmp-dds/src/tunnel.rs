@@ -14,8 +14,12 @@ use bytes::Bytes;
 
 use crate::raw::RawMsg;
 
-const MAGIC: &[u8; 8] = b"RCPTUN1\0";
-const MAX_FRAME_LEN: usize = 64 * 1024 * 1024;
+// Frame magic and kind tags live in the no_std `roscmp-tunnel-core` crate so a
+// no-DDS MCU speaks the exact same wire protocol; the codec below and that core
+// are pinned together by `tests/tunnel_core_equivalence.rs`.
+use roscmp_tunnel_core::kind;
+const MAGIC: &[u8; 8] = &roscmp_tunnel_core::MAGIC;
+const MAX_FRAME_LEN: usize = roscmp_tunnel_core::MAX_PAYLOAD_LEN;
 
 // Not encoded on the wire (frames carry their own kind byte in `encode_frame`);
 // this is only an in-memory routing key, so variants can be added freely.
@@ -931,7 +935,7 @@ fn encode_frame(frame: &TunnelFrame) -> io::Result<Vec<u8>> {
     let mut w = Vec::new();
     match frame {
         TunnelFrame::Hello { peer } => {
-            w.push(1);
+            w.push(kind::HELLO);
             write_string(&mut w, peer)?;
         }
         TunnelFrame::TopicSample {
@@ -940,7 +944,7 @@ fn encode_frame(frame: &TunnelFrame) -> io::Result<Vec<u8>> {
             stamp_nanos,
             msg,
         } => {
-            w.push(2);
+            w.push(kind::TOPIC_SAMPLE);
             w.write_all(&sequence.to_le_bytes())?;
             write_string(&mut w, topic)?;
             write_string(&mut w, msg.ros_type())?;
@@ -948,11 +952,11 @@ fn encode_frame(frame: &TunnelFrame) -> io::Result<Vec<u8>> {
             write_bytes(&mut w, msg.cdr())?;
         }
         TunnelFrame::Ack { sequence } => {
-            w.push(3);
+            w.push(kind::ACK);
             w.write_all(&sequence.to_le_bytes())?;
         }
         TunnelFrame::Heartbeat { stamp_nanos } => {
-            w.push(4);
+            w.push(kind::HEARTBEAT);
             w.write_all(&stamp_nanos.to_le_bytes())?;
         }
     }
@@ -961,12 +965,12 @@ fn encode_frame(frame: &TunnelFrame) -> io::Result<Vec<u8>> {
 
 fn decode_frame(payload: &[u8]) -> io::Result<TunnelFrame> {
     let mut r = payload;
-    let kind = read_u8(&mut r)?;
-    match kind {
-        1 => Ok(TunnelFrame::Hello {
+    let tag = read_u8(&mut r)?;
+    match tag {
+        kind::HELLO => Ok(TunnelFrame::Hello {
             peer: read_string(&mut r)?,
         }),
-        2 => {
+        kind::TOPIC_SAMPLE => {
             let sequence = read_u64(&mut r)?;
             let topic = read_string(&mut r)?;
             let ros_type = read_string(&mut r)?;
@@ -979,10 +983,10 @@ fn decode_frame(payload: &[u8]) -> io::Result<TunnelFrame> {
                 msg: RawMsg::new(ros_type, cdr),
             })
         }
-        3 => Ok(TunnelFrame::Ack {
+        kind::ACK => Ok(TunnelFrame::Ack {
             sequence: read_u64(&mut r)?,
         }),
-        4 => Ok(TunnelFrame::Heartbeat {
+        kind::HEARTBEAT => Ok(TunnelFrame::Heartbeat {
             stamp_nanos: read_i64(&mut r)?,
         }),
         _ => Err(io::Error::new(

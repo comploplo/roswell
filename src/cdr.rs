@@ -1,7 +1,13 @@
 //! CDR (Common Data Representation) runtime — the DDS/ROS2 wire format.
 //!
-//! This implements **Classic CDR / XCDR1** as used by ROS2's `rmw_fastrtps` and
-//! `rmw_cyclonedds`:
+//! This implements **Classic CDR / XCDR1** (the ROS2 wire default) and
+//! **PLAIN_CDR2 / XCDR2** (the forward-looking Iron+ / rmw_zenoh format),
+//! selected by [`Encoding`]. A [`Reader`] auto-detects the encoding from the
+//! encapsulation identifier; a [`Writer`] emits whichever is requested (default
+//! XCDR1). For a `@final` struct — which every ROS2 interface type is — the only
+//! body difference is that XCDR2 caps the maximum primitive alignment at 4, so
+//! 8-byte primitives align to 4 rather than 8. As used by ROS2's `rmw_fastrtps`
+//! and `rmw_cyclonedds`:
 //!
 //! - A 4-byte **encapsulation header** prefixes every message:
 //!   `repr_id` (2 bytes, big-endian) + `options` (2 bytes). `CDR_LE = 0x0001`,
@@ -162,6 +168,97 @@ mod tests {
     fn bad_encapsulation_is_error() {
         let buf = [0xFF, 0xFF, 0x00, 0x00];
         assert_eq!(Reader::new(&buf).err(), Some(CdrError::BadEncapsulation));
+    }
+
+    // ---- XCDR2 (PLAIN_CDR2) ------------------------------------------------
+
+    #[test]
+    fn xcdr2_encapsulation_header_le_is_cdr2() {
+        let w = Writer::with_encoding(Endian::Little, Encoding::Xcdr2);
+        // PLAIN_CDR2 little-endian: repr id `00 07`, options `00 00`.
+        assert_eq!(&w.finish()[..4], &[0x00, 0x07, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn xcdr2_encapsulation_header_be_is_cdr2() {
+        let w = Writer::with_encoding(Endian::Big, Encoding::Xcdr2);
+        assert_eq!(&w.finish()[..4], &[0x00, 0x06, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn xcdr2_f64_aligns_to_four_not_eight() {
+        // {uint8 a=1; float64 b=2.0}: in XCDR1 `b` pads to offset 8; in XCDR2 the
+        // max-align-4 rule lands it at offset 4. This is the whole XCDR2 delta.
+        let mut w = Writer::with_encoding(Endian::Little, Encoding::Xcdr2);
+        w.write_u8(1);
+        w.write_f64(2.0);
+        assert_eq!(
+            body(&w.finish()),
+            &[
+                0x01, 0x00, 0x00, 0x00, // a=1 then 3 pad bytes to align(4)
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, // b=2.0 at offset 4
+            ]
+        );
+    }
+
+    #[test]
+    fn xcdr1_f64_still_aligns_to_eight() {
+        // Same message under XCDR1: `b` pads all the way to offset 8 (unchanged).
+        let mut w = Writer::new(Endian::Little);
+        w.write_u8(1);
+        w.write_f64(2.0);
+        assert_eq!(body(&w.finish()).len(), 16);
+    }
+
+    #[test]
+    fn xcdr2_is_smaller_for_eight_byte_heavy_types() {
+        // {int32 a; int64 b}: XCDR1 = 4 + 4 pad + 8 = 16; XCDR2 = 4 + 8 = 12.
+        let enc = |e: Encoding| {
+            let mut w = Writer::with_encoding(Endian::Little, e);
+            w.write_i32(7);
+            w.write_i64(9);
+            w.finish().len()
+        };
+        assert_eq!(enc(Encoding::Xcdr1), 4 + 16);
+        assert_eq!(enc(Encoding::Xcdr2), 4 + 12);
+        assert!(enc(Encoding::Xcdr2) < enc(Encoding::Xcdr1));
+    }
+
+    #[test]
+    fn xcdr2_string_framing_unchanged() {
+        // Strings keep the classic uint32 length (incl. NUL) + bytes + NUL.
+        let mut w = Writer::with_encoding(Endian::Little, Encoding::Xcdr2);
+        w.write_string("abc");
+        assert_eq!(
+            body(&w.finish()),
+            &[0x04, 0x00, 0x00, 0x00, b'a', b'b', b'c', 0x00]
+        );
+    }
+
+    #[test]
+    fn reader_autodetects_xcdr2_and_roundtrips() {
+        let mut w = Writer::with_encoding(Endian::Little, Encoding::Xcdr2);
+        w.write_u8(1);
+        w.write_f64(2.0);
+        w.write_i32(3);
+        w.write_i64(4);
+        w.write_string("hello");
+        let out = w.finish();
+
+        let mut r = Reader::new(&out).unwrap();
+        assert_eq!(r.encoding(), Encoding::Xcdr2);
+        assert_eq!(r.endian(), Endian::Little);
+        assert_eq!(r.read_u8().unwrap(), 1);
+        assert_eq!(r.read_f64().unwrap(), 2.0);
+        assert_eq!(r.read_i32().unwrap(), 3);
+        assert_eq!(r.read_i64().unwrap(), 4);
+        assert_eq!(r.read_string().unwrap(), "hello");
+    }
+
+    #[test]
+    fn reader_reports_xcdr1_encoding() {
+        let out = Writer::new(Endian::Little).finish();
+        assert_eq!(Reader::new(&out).unwrap().encoding(), Encoding::Xcdr1);
     }
 
     /// The CDR alignment formula is embedded verbatim into generated bindings,

@@ -18,6 +18,20 @@ needed to *use* it. Common interface definitions (`std_msgs`, `geometry_msgs`,
 `sensor_msgs`, `example_interfaces`, …) ship inside the wheel, so
 `load_type("geometry_msgs/msg/Twist")` works with no file paths.
 
+### Raspberry Pi / ARM Linux
+
+roscmp targets embedded nodes: the runtime is a compact cdylib (idle `Node`
+resident memory is a few MB over the interpreter) with a fast import, and the
+package is pure `ctypes` — **numpy is optional**. Install the manylinux
+`aarch64` wheel on Pi-class ARM Linux and skip the numpy extra to keep the
+footprint minimal; primitive arrays then come back as plain Python lists instead
+of zero-copy numpy views:
+
+```bash
+pip install roscmp            # no numpy — lists for array fields
+pip install roscmp[numpy]     # + numpy for zero-copy views (if you want them)
+```
+
 ## Quickstart
 
 ```python
@@ -76,6 +90,48 @@ node.serve("/add_two_ints", (req_t, resp_t), handler)   # sync or async handler
 All parsing, layout, CDR (de)serialization, QoS, transport, and reply
 correlation live in Rust; this package is ctypes bindings + asyncio plumbing.
 
+## Parameters
+
+Declare, read, and update node parameters. The first parameter call stands up a
+parameter server (a background thread in the Rust runtime) so `ros2 param
+get/set/list` sees the node and every change publishes `/parameter_events`:
+
+```python
+node = roscmp.Node("driver", domain=0)
+node.declare_parameter("speed", 1.5)        # float
+node.declare_parameter("gain", 7)           # int
+node.declare_parameter("frame", "base_link")# str
+node.declare_parameter("enabled", True)     # bool
+
+node.get_parameter("speed")                 # -> 1.5
+node.set_parameter("gain", 9)               # publishes a /parameter_events update
+node.list_parameters()                      # -> ["enabled", "frame", "gain", "speed"]
+```
+
+Scalar types (`bool`, `int`, `float`, `str`) are supported — the common case for
+node configuration. Values live in Rust; the Python surface is just the typed
+call across the FFI.
+
+## Timers
+
+`create_timer` runs a periodic callback (sync or `async`) on the asyncio loop —
+the idiomatic "publish at N Hz" node loop. Timing is plumbing, so it lives in
+Python; cancel it explicitly or let `node.close()` stop it:
+
+```python
+async def main():
+    node = roscmp.Node("ticker", domain=0)
+    pub = node.publisher("/chatter", node.load_type("std_msgs/msg/String"))
+
+    def tick():
+        m = pub.new(); m.data = "hi"; pub.publish(m)
+
+    node.create_timer(0.1, tick)            # 10 Hz
+    await asyncio.Event().wait()            # spin
+
+asyncio.run(main())
+```
+
 ## Develop
 
 ```bash
@@ -107,4 +163,35 @@ The wheel version is single-sourced from the crate (`roscmp-c/Cargo.toml`).
 from roscmp import QosProfile
 pub = node.publisher("/scan", T, qos=QosProfile.preset("sensor_data"))
 sub = node.subscribe("/scan", T, qos=QosProfile(reliability="best_effort", depth=5))
+```
+
+## Visualize with Foxglove
+
+roscmp has no in-process visualization, but it interoperates with
+[Foxglove Studio](https://foxglove.dev/) through MCAP files. Record any topics
+your Python nodes publish with the `bag_record` binary from the Rust workspace,
+then open the resulting `.mcap` in Foxglove.
+
+Record (type-blind — no ROS install needed), from the repo root:
+
+```bash
+# Named topics with their ROS types (matches the domain your Node uses):
+cargo run --release -p roscmp-dds --bin bag_record -- \
+    --output chatter.mcap --domain 0 --topic /chatter:std_msgs/msg/String
+
+# ...or discover and record everything on the graph for 10 seconds:
+cargo run --release -p roscmp-dds --bin bag_record -- \
+    --output session.mcap --domain 0 --all --duration 10
+```
+
+Recording stops on `--duration`, on Enter/Ctrl-D at a terminal, or on Ctrl-C
+(already-flushed chunks stay readable). A per-topic message-count summary prints
+on a clean stop.
+
+Then in Foxglove Studio choose **Open local file…** and select the `.mcap` — the
+schemas travel inside the file, so panels (Raw Messages, Plot, 3D, …) work with
+no extra setup. To sanity-check a recording without Foxglove, replay it:
+
+```bash
+cargo run --release -p roscmp-dds --bin bag_play -- session.mcap --domain 0
 ```

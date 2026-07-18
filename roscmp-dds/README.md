@@ -128,6 +128,7 @@ Headless proof (Docker) — drives turtlesim under xvfb and checks the pose move
 
 Bags now capture each channel's QoS (`offered_qos_profiles` channel metadata,
 compact `key=value` form) and `bag_play` restores it (`--no-qos-restore` to
-opt out). Remaining gaps: rosbag2 `.db3`/`metadata.yaml` replay, advertising
-RIHS01 type hashes in discovery and per-node endpoint GIDs (both blocked on
-RustDDS), XCDR2, and wheel packaging for the Python client (`python/`).
+opt out). The Python client (`python/`) ships as a self-contained platform
+wheel — see `python/README.md`. Remaining gaps: rosbag2 `.db3`/`metadata.yaml`
+replay, advertising RIHS01 type hashes in discovery and per-node endpoint GIDs
+(both blocked on RustDDS), and XCDR2.

@@ -1,0 +1,12 @@
+[package]
+name = "roscmp-tunnel-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "no_std, alloc-free wire codec for roscmp tunnel frames (shared by the std tunnel and no_std MCU firmware)"
+
+[dependencies]
+
+[lints]
+workspace = true

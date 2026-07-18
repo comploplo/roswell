@@ -59,6 +59,12 @@ fn run_server(stop: &Arc<AtomicBool>) {
         example_interfaces__Fibonacci_GetResult_Request,
         example_interfaces__Fibonacci_GetResult_Response,
     >::new(&dds, &names.get_result);
+    // A real action server always offers cancellation; the client's
+    // server_is_ready() rightly refuses to report ready without it.
+    let mut cancel_goal = Service::<roscmp_dds::action::CancelGoalRequest, CancelGoalResponse>::new(
+        &dds,
+        &names.cancel_goal,
+    );
     let feedback = dds
         .publisher::<example_interfaces__Fibonacci_FeedbackMessage>(&names.feedback, Qos::Default);
     let status = dds.publisher::<GoalStatusArrayMsg>(&names.status, Qos::Latched);
@@ -75,6 +81,9 @@ fn run_server(stop: &Arc<AtomicBool>) {
                 stamp: now.to_msg(),
             }
         });
+
+        cancel_goal
+            .serve_pending(|_req| CancelGoalResponse::empty(CancelGoalResponse::ERROR_REJECTED));
 
         get_result.serve_pending(|req| {
             let goal_id = GoalId(req.goal_id.uuid);
@@ -117,8 +126,13 @@ fn action_client_goal_feedback_result_loopback() {
     let dds = Dds::new(0);
     let mut client: FibClient = ActionClient::new(&dds, "/fibonacci");
 
-    // Let discovery match all five endpoints before the first write.
-    std::thread::sleep(Duration::from_secs(3));
+    // Block until discovery has matched every service endpoint (a fixed sleep
+    // flakes under full-suite load), then still retry: matched != flushed.
+    let ready_deadline = Instant::now() + Duration::from_secs(15);
+    while !client.server_is_ready() && Instant::now() < ready_deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(client.server_is_ready(), "server endpoints never matched");
 
     // Send the goal, retrying while discovery settles (volatile writers drop
     // requests sent before the reply reader is matched).
@@ -136,10 +150,12 @@ fn action_client_goal_feedback_result_loopback() {
     let goal_id = accepted.expect("goal was never accepted");
 
     // Collect feedback and the result within a bounded window.
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let mut got_feedback = false;
     let mut result = None;
-    while Instant::now() < deadline && result.is_none() {
+    // The server feeds back every 50ms for as long as it runs, so keep polling
+    // until BOTH arrive: the result can beat the first feedback sample.
+    while Instant::now() < deadline && (result.is_none() || !got_feedback) {
         for sample in client.poll_feedback() {
             if sample.goal_id == goal_id {
                 let seq = sample.feedback.partial_sequence.as_slice();
@@ -148,8 +164,12 @@ fn action_client_goal_feedback_result_loopback() {
                 }
             }
         }
-        if let Some((status, res)) = client.get_result(goal_id, Duration::from_millis(200)) {
-            result = Some((status, res));
+        if result.is_none() {
+            if let Some((status, res)) = client.get_result(goal_id, Duration::from_millis(200)) {
+                result = Some((status, res));
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 
@@ -187,10 +207,11 @@ fn action_client_cancel_reaches_server() {
 
     let dds = Dds::new(0);
     let mut client: FibClient = ActionClient::new(&dds, "/fibonacci_cancel");
-    std::thread::sleep(Duration::from_secs(3));
-
+    // This mini-server only offers the cancel service, so server_is_ready()
+    // (which needs all three) never turns true; the retry loop below is the
+    // discovery wait.
     let mut resp = None;
-    for _ in 0..10 {
+    for _ in 0..15 {
         if let Some(r) = client.cancel_goal(GoalId::generate(), Duration::from_secs(2)) {
             resp = Some(r);
             break;

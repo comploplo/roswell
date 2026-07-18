@@ -15,7 +15,10 @@ publish = false
 # enables). Normal builds compile plain Rust with the contracts erased, so this
 # crate adds no always-on dependency to the workspace. See docs/RT.md.
 [dependencies]
-creusot-std = { version = "0.13.0-dev", optional = true }
+# Pinned to the same revision as the locally installed Creusot toolchain;
+# a git source (not crates.io) because 0.13.0-dev is unpublished — this keeps
+# the workspace resolvable on machines without a local creusot checkout.
+creusot-std = { git = "https://github.com/creusot-rs/creusot", rev = "bef58f6aa7493ac8c8012164a8eeab462c346d1a", optional = true }
 
 [features]
 verify = ["dep:creusot-std"]

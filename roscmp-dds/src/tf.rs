@@ -214,6 +214,25 @@ impl TfBuffer {
         source_frame: &str,
         stamp: Time,
     ) -> Result<Transform, LookupError> {
+        self.lookup_impl(target_frame, source_frame, Some(stamp))
+    }
+
+    /// Like [`TfBuffer::lookup`], but samples each edge at its newest stamp —
+    /// tf2's "time zero / latest available" semantics.
+    pub fn lookup_latest(
+        &self,
+        target_frame: &str,
+        source_frame: &str,
+    ) -> Result<Transform, LookupError> {
+        self.lookup_impl(target_frame, source_frame, None)
+    }
+
+    fn lookup_impl(
+        &self,
+        target_frame: &str,
+        source_frame: &str,
+        stamp: Option<Time>,
+    ) -> Result<Transform, LookupError> {
         if target_frame.is_empty() || source_frame.is_empty() {
             return Err(LookupError::EmptyFrame);
         }
@@ -257,7 +276,17 @@ impl TfBuffer {
     }
 }
 
-fn sample_at(samples: &[StampedTransform], stamp: Time) -> Result<StampedTransform, LookupError> {
+fn sample_at(
+    samples: &[StampedTransform],
+    stamp: Option<Time>,
+) -> Result<StampedTransform, LookupError> {
+    let Some(stamp) = stamp else {
+        // Latest-available semantics: the newest sample on the edge.
+        return Ok(samples
+            .last()
+            .expect("empty edges are never inserted")
+            .clone());
+    };
     match samples {
         [] => unreachable!("empty edge vectors are never inserted"),
         [one] => Ok(one.clone()),

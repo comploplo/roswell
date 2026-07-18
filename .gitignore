@@ -8,3 +8,5 @@ python/roscmp.egg-info/
 *.coma
 .why3find
 _creusot_erasure
+python/dist/
+scratchpad/

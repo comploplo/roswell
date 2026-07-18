@@ -1,75 +1,59 @@
-//! Minimal `example_interfaces/action/Fibonacci` action server.
+//! Minimal `example_interfaces/action/Fibonacci` action server, on the generic
+//! [`ActionServer`].
 
 use std::collections::HashMap;
 use std::time::Duration;
 
-use roscmp_dds::action::{
-    ActionNames, CancelGoalRequest, CancelGoalResponse, GoalId, GoalStatus, GoalStatusArrayMsg,
-    GoalStatusMsg,
-};
+use roscmp_dds::action::{ActionServer, GoalId, GoalStatus};
 use roscmp_dds::msgs::{
     example_interfaces__Fibonacci_Feedback, example_interfaces__Fibonacci_FeedbackMessage,
     example_interfaces__Fibonacci_GetResult_Request,
     example_interfaces__Fibonacci_GetResult_Response, example_interfaces__Fibonacci_Result,
     example_interfaces__Fibonacci_SendGoal_Request,
-    example_interfaces__Fibonacci_SendGoal_Response, unique_identifier_msgs__UUID, RosSequence,
+    example_interfaces__Fibonacci_SendGoal_Response, RosSequence,
 };
-use roscmp_dds::service::Service;
-use roscmp_dds::time::Time;
-use roscmp_dds::transport::{Dds, MsgPublisher, Qos, Transport};
+use roscmp_dds::transport::Dds;
 
 fn main() {
     let dds = Dds::new(0);
-    let names = ActionNames::new("/fibonacci");
-    let mut send_goal = Service::<
+    let mut server: ActionServer<
         example_interfaces__Fibonacci_SendGoal_Request,
         example_interfaces__Fibonacci_SendGoal_Response,
-    >::new(&dds, &names.send_goal);
-    let mut get_result = Service::<
         example_interfaces__Fibonacci_GetResult_Request,
         example_interfaces__Fibonacci_GetResult_Response,
-    >::new(&dds, &names.get_result);
-    let mut cancel_goal =
-        Service::<CancelGoalRequest, CancelGoalResponse>::new(&dds, &names.cancel_goal);
-    let feedback = dds
-        .publisher::<example_interfaces__Fibonacci_FeedbackMessage>(&names.feedback, Qos::Default);
-    let status = dds.publisher::<GoalStatusArrayMsg>(&names.status, Qos::Latched);
-    let mut goals = HashMap::new();
+        example_interfaces__Fibonacci_FeedbackMessage,
+    > = ActionServer::new(&dds, "/fibonacci");
+    let mut goals: HashMap<GoalId, i32> = HashMap::new();
 
     println!("fibonacci_action_server: serving /fibonacci for 45s");
     for _ in 0..450 {
-        let now = Time::now_system();
-        send_goal.serve_pending(|req| {
-            let goal_id = GoalId(req.goal_id.uuid);
-            let order = req.goal.order;
-            goals.insert(goal_id, order);
-            feedback.publish(feedback_msg(goal_id, &[0, 1]));
-            example_interfaces__Fibonacci_SendGoal_Response {
-                accepted: true,
-                stamp: now.to_msg(),
-            }
+        let mut accepted = Vec::new();
+        server.serve_goals(|goal_id, goal| {
+            goals.insert(goal_id, goal.order);
+            accepted.push(goal_id);
+            true
         });
+        for goal_id in accepted {
+            server.publish_feedback(
+                goal_id,
+                example_interfaces__Fibonacci_Feedback {
+                    partial_sequence: RosSequence::alloc(vec![0, 1]),
+                },
+            );
+        }
 
-        get_result.serve_pending(|req| {
-            let goal_id = GoalId(req.goal_id.uuid);
+        server.serve_results(|goal_id| {
             let order = goals.get(&goal_id).copied().unwrap_or(0);
-            example_interfaces__Fibonacci_GetResult_Response {
-                status: GoalStatus::Succeeded as i8,
-                result: example_interfaces__Fibonacci_Result {
+            (
+                GoalStatus::Succeeded,
+                example_interfaces__Fibonacci_Result {
                     sequence: RosSequence::alloc(fibonacci(order)),
                 },
-            }
+            )
         });
 
-        cancel_goal
-            .serve_pending(|_req| CancelGoalResponse::empty(CancelGoalResponse::ERROR_REJECTED));
-
-        let statuses = goals
-            .keys()
-            .copied()
-            .map(|goal_id| GoalStatusMsg::new(goal_id, now, GoalStatus::Succeeded))
-            .collect();
-        status.publish(GoalStatusArrayMsg::new(statuses));
+        server.serve_cancels();
+        server.publish_status();
         std::thread::sleep(Duration::from_millis(100));
     }
 }
@@ -88,16 +72,4 @@ fn fibonacci(order: i32) -> Vec<i32> {
         seq.push(value);
     }
     seq
-}
-
-fn feedback_msg(
-    goal_id: GoalId,
-    partial_sequence: &[i32],
-) -> example_interfaces__Fibonacci_FeedbackMessage {
-    example_interfaces__Fibonacci_FeedbackMessage {
-        goal_id: unique_identifier_msgs__UUID { uuid: goal_id.0 },
-        feedback: example_interfaces__Fibonacci_Feedback {
-            partial_sequence: RosSequence::alloc(partial_sequence.to_vec()),
-        },
-    }
 }

@@ -608,6 +608,18 @@ fn emit_cdr(out: &mut String, msg: &Message, name: &str) {
          \x20   }\n\n",
     );
 
+    // XCDR2 (PLAIN_CDR2) reuses the same body writer; only the encapsulation
+    // header and the 8-byte-primitive alignment cap differ, both handled by the
+    // `Writer` encoding. `from_cdr` auto-detects the encoding, so no XCDR2 read
+    // entry point is needed.
+    out.push_str(
+        "    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {\n\
+         \x20       let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);\n\
+         \x20       self.serialize_into(&mut w);\n\
+         \x20       w.finish()\n\
+         \x20   }\n\n",
+    );
+
     let w_param = if msg.fields.is_empty() { "_w" } else { "w" };
     out.push_str(&format!(
         "    pub fn serialize_into(&self, {w_param}: &mut Writer) {{\n"
@@ -652,7 +664,7 @@ fn emit_cdr(out: &mut String, msg: &Message, name: &str) {
 
 /// A field name as a Rust identifier, raw-escaping the reserved words a ROS
 /// field can legally collide with (e.g. `type` in `type_description_interfaces`).
-fn field_ident(name: &str) -> String {
+pub(super) fn field_ident(name: &str) -> String {
     const KEYWORDS: &[&str] = &[
         "as", "break", "const", "continue", "dyn", "else", "enum", "extern", "false", "fn", "for",
         "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
@@ -795,7 +807,7 @@ fn render_element(e: &Element) -> String {
     }
 }
 
-fn render_value(v: &crate::ast::Value, ty: &ConstType) -> String {
+pub(super) fn render_value(v: &crate::ast::Value, ty: &ConstType) -> String {
     use crate::ast::Value;
     match v {
         Value::Bool(b) => b.to_string(),

@@ -108,7 +108,7 @@ impl<T> Clone for Dec<T> {
         *self
     }
 }
-impl<T: CdrMsg> Decode<T> for Dec<T> {
+impl<T: CdrMsg> Decode<'_, T> for Dec<T> {
     type Error = CodecError;
     fn decode_bytes(
         self,

@@ -20,6 +20,7 @@ from ctypes import (
     POINTER,
     c_char_p,
     c_int,
+    c_int8,
     c_int64,
     c_size_t,
     c_uint8,
@@ -144,6 +145,30 @@ class RcmQos(ctypes.Structure):
     ]
 
 
+class RcmParamValue(ctypes.Structure):
+    """Mirror of the C ``RcmParamValue`` struct (scalar parameter value)."""
+
+    _fields_ = [
+        ("kind", c_uint8),
+        ("boolean", c_uint8),
+        ("integer", c_int64),
+        ("number", ctypes.c_double),
+        ("text", c_char_p),
+    ]
+
+
+#: ParameterType tags shared with the Rust ``ParameterType`` enum.
+PARAM_BOOL = 1
+PARAM_INTEGER = 2
+PARAM_DOUBLE = 3
+PARAM_STRING = 4
+PARAM_BYTE_ARRAY = 5
+PARAM_BOOL_ARRAY = 6
+PARAM_INTEGER_ARRAY = 7
+PARAM_DOUBLE_ARRAY = 8
+PARAM_STRING_ARRAY = 9
+
+
 _U8 = POINTER(c_uint8)
 _H = c_uint64  # RcmHandle
 
@@ -170,6 +195,12 @@ def _declare(lib: ctypes.CDLL) -> None:
     sig("rcm_type_load", _H, [c_char_p, POINTER(c_char_p), c_size_t])
     sig(
         "rcm_type_load_srv",
+        c_int,
+        [c_char_p, POINTER(c_char_p), c_size_t, POINTER(_H), POINTER(_H)],
+    )
+    sig("rcm_type_resolve", _H, [c_char_p, POINTER(c_char_p), c_size_t])
+    sig(
+        "rcm_type_resolve_srv",
         c_int,
         [c_char_p, POINTER(c_char_p), c_size_t, POINTER(_H), POINTER(_H)],
     )
@@ -204,8 +235,75 @@ def _declare(lib: ctypes.CDLL) -> None:
     sig("rcm_call", c_int, [_H, _H, _H, c_int])
     sig("rcm_client_free", c_int, [_H])
 
+    sig(
+        "rcm_action_client",
+        _H,
+        [_H, c_char_p, c_char_p, POINTER(c_char_p), c_size_t],
+    )
+    sig("rcm_action_load", c_int, [c_char_p, POINTER(c_char_p), c_size_t, POINTER(_H)])
+    sig("rcm_action_goal_type", _H, [_H])
+    sig("rcm_action_result_type", _H, [_H])
+    sig("rcm_action_feedback_type", _H, [_H])
+    sig("rcm_action_server_ready", c_int, [_H])
+    sig("rcm_action_send_goal", c_int, [_H, _H, c_int, _U8, _U8])
+    sig("rcm_action_get_result", c_int, [_H, _U8, _H, c_int, POINTER(c_int8)])
+    sig("rcm_action_poll_feedback", c_int, [_H, _H, _U8])
+    sig("rcm_action_cancel_goal", c_int, [_H, _U8, c_int, POINTER(c_int8)])
+    sig("rcm_action_client_free", c_int, [_H])
+
+    sig("rcm_param_server", _H, [_H, c_char_p])
+    sig("rcm_param_set", c_int, [_H, c_char_p, POINTER(RcmParamValue)])
+    sig("rcm_param_set_array", c_int, [_H, c_char_p, c_uint8, c_void_p, c_size_t])
+    sig(
+        "rcm_param_set_string_array",
+        c_int,
+        [_H, c_char_p, POINTER(c_char_p), c_size_t],
+    )
+    sig("rcm_param_get_json", c_void_p, [_H, c_char_p])
+    sig("rcm_param_list_json", c_void_p, [_H])
+    sig("rcm_param_server_free", c_int, [_H])
+
     sig("rcm_graph_json", c_void_p, [_H, c_int])
     sig("rcm_node", c_int, [_H, c_char_p, c_char_p])
+
+    sig("rcm_bag_open_write", _H, [c_char_p, c_char_p])
+    sig("rcm_bag_write", c_int, [_H, c_char_p, c_int64, _H])
+    sig("rcm_bag_writer_close", c_int, [_H])
+    sig("rcm_bag_open_read", _H, [c_char_p])
+    sig("rcm_bag_next", c_int, [_H])
+    sig("rcm_bag_info_json", c_void_p, [_H])
+    sig("rcm_bag_data", c_int, [_H, c_void_p, c_size_t])
+    sig("rcm_bag_decode", c_int, [_H, _H])
+    sig("rcm_bag_schema", c_void_p, [_H, c_char_p])
+    sig("rcm_bag_reader_free", c_int, [_H])
+
+    sig("rcm_tf_buffer", _H, [_H])
+    sig(
+        "rcm_tf_lookup",
+        c_int,
+        [_H, c_char_p, c_char_p, c_int64, POINTER(ctypes.c_double)],
+    )
+    sig(
+        "rcm_tf_broadcast",
+        c_int,
+        [_H, c_char_p, c_char_p, c_int64, c_uint8, POINTER(ctypes.c_double)],
+    )
+    sig("rcm_tf_free", c_int, [_H])
+
+    sig(
+        "rcm_action_server",
+        _H,
+        [_H, c_char_p, c_char_p, POINTER(c_char_p), c_size_t],
+    )
+    sig("rcm_action_server_goal_type", _H, [_H])
+    sig("rcm_action_server_result_type", _H, [_H])
+    sig("rcm_action_server_feedback_type", _H, [_H])
+    sig("rcm_action_server_spin", c_int, [_H])
+    sig("rcm_action_server_take_goal", c_int, [_H, _H, _U8])
+    sig("rcm_action_server_cancel_requested", c_int, [_H, _U8])
+    sig("rcm_action_server_publish_feedback", c_int, [_H, _U8, _H])
+    sig("rcm_action_server_finish", c_int, [_H, _U8, c_int8, _H])
+    sig("rcm_action_server_free", c_int, [_H])
 
 
 def _check_abi(lib: ctypes.CDLL) -> None:

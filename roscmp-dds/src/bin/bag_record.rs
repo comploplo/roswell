@@ -23,6 +23,13 @@ use roscmp_dds::time::Time;
 use roscmp_dds::transport::Dds;
 use roscmp_dds::tunnel::TopicRoute;
 
+#[path = "shared/argcursor.rs"]
+mod argcursor;
+use argcursor::ArgCursor;
+
+const USAGE: &str = "usage: bag_record --output out.mcap (--all | --topic /name:pkg/msg/Type ...) \
+     [--domain N] [--duration SECS] [--compression lz4|none]";
+
 /// How often `--all` re-scans the graph to pick up late-appearing topics.
 const RESCAN_INTERVAL: Duration = Duration::from_secs(1);
 /// Idle sleep between poll passes so the loop does not busy-spin.
@@ -183,49 +190,38 @@ struct Args {
 
 impl Args {
     fn parse() -> io::Result<Self> {
-        let mut iter = std::env::args().skip(1);
+        let mut c = ArgCursor::new(USAGE);
         let mut output = None;
         let mut domain = 0u16;
         let mut duration = None;
         let mut compression = Compression::default();
         let mut all = false;
         let mut topics = Vec::new();
-        while let Some(arg) = iter.next() {
+        while let Some(arg) = c.next_arg() {
             match arg.as_str() {
-                "--output" | "-o" => output = Some(iter.next().ok_or_else(usage)?),
-                "--domain" => {
-                    domain = iter
-                        .next()
-                        .ok_or_else(usage)?
-                        .parse()
-                        .map_err(|_| usage())?;
-                }
+                "--output" | "-o" => output = Some(c.value()?),
+                "--domain" => domain = c.parse()?,
                 "--duration" => {
-                    let secs: f64 = iter
-                        .next()
-                        .ok_or_else(usage)?
-                        .parse()
-                        .map_err(|_| usage())?;
+                    let secs: f64 = c.parse()?;
                     if !secs.is_finite() || secs <= 0.0 {
-                        return Err(usage());
+                        return Err(c.usage());
                     }
                     duration = Some(Duration::from_secs_f64(secs));
                 }
                 "--compression" => {
-                    compression = iter
-                        .next()
-                        .ok_or_else(usage)?
+                    compression = c
+                        .value()?
                         .parse()
                         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
                 }
                 "--all" => all = true,
-                "--topic" => topics.push(TopicRoute::parse(&iter.next().ok_or_else(usage)?)?),
-                _ => return Err(usage()),
+                "--topic" => topics.push(TopicRoute::parse(&c.value()?)?),
+                _ => return Err(c.usage()),
             }
         }
-        let output = output.ok_or_else(usage)?;
+        let output = output.ok_or_else(|| c.usage())?;
         if !all && topics.is_empty() {
-            return Err(usage());
+            return Err(c.usage());
         }
         Ok(Self {
             output,
@@ -251,12 +247,4 @@ impl Args {
             format!("{} topic(s)", self.topics.len())
         }
     }
-}
-
-fn usage() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidInput,
-        "usage: bag_record --output out.mcap (--all | --topic /name:pkg/msg/Type ...) \
-         [--domain N] [--duration SECS] [--compression lz4|none]",
-    )
 }

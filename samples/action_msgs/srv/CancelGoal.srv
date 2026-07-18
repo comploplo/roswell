@@ -1,0 +1,4 @@
+action_msgs/GoalInfo goal_info
+---
+int8 return_code
+action_msgs/GoalInfo[] goals_canceling

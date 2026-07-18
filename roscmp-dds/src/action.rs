@@ -4,9 +4,9 @@ use std::collections::HashMap;
 
 use crate::codec::{impl_cdr_msg, CdrMsg, CodecError};
 use crate::msgs::{builtin_interfaces__Time, CdrError, Endian, Reader, RosSequence, Writer};
-use crate::service::Client;
+use crate::service::{Client, Service};
 use crate::time::{Duration, Time};
-use crate::transport::{Dds, DdsSub, MsgSubscriber, Qos, Transport};
+use crate::transport::{Dds, DdsPub, DdsSub, MsgPublisher, MsgSubscriber, Qos, Transport};
 
 /// ROS action service/topic names for one action.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -595,6 +595,17 @@ where
         }
     }
 
+    /// True once all three service clients (`send_goal`, `get_result`,
+    /// `cancel_goal`) have discovered their server endpoints. Poll before the
+    /// first `send_goal` instead of sleeping for discovery.
+    pub fn server_is_ready(&mut self) -> bool {
+        // No short-circuit: each call also drains that client's status queue.
+        let sg = self.send_goal.server_is_ready();
+        let gr = self.get_result.server_is_ready();
+        let cg = self.cancel_goal.server_is_ready();
+        sg && gr && cg
+    }
+
     /// Send `goal` under a freshly generated id, blocking up to `timeout` for the
     /// server's accept/reject reply. Returns the goal id and whether it was
     /// accepted, or `None` on timeout.
@@ -664,6 +675,134 @@ where
             goal_info: GoalInfoMsg::new(goal_id, Time::now_system()),
         };
         self.cancel_goal.call(req, timeout)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Server side (transport-bound)
+// ---------------------------------------------------------------------------
+
+/// Server for one ROS2 action, generic over its five wire types — the mirror
+/// image of [`ActionClient`], using the server-direction traits
+/// ([`SendGoalRequest`], [`SendGoalResponse`], [`GetResultRequest`],
+/// [`GetResultResponse`], [`FeedbackMessage`]) the compiler emits per action.
+///
+/// The three services ride [`Service`]; feedback is a [`Qos::Default`]
+/// publisher and status a [`Qos::Latched`] one, matching what a vanilla client
+/// (`ros2 action send_goal`) expects. Goal bookkeeping and the cancel policy
+/// live in an internal [`ActionServerState`]; the caller owns the payloads
+/// (goal parameters, result computation) via the serve-handler closures, so no
+/// `Clone` bounds are forced onto generated types.
+pub struct ActionServer<SgReq, SgResp, GrReq, GrResp, Fb>
+where
+    SgReq: CdrMsg + SendGoalRequest,
+    SgResp: CdrMsg + SendGoalResponse,
+    GrReq: CdrMsg + GetResultRequest,
+    GrResp: CdrMsg + GetResultResponse,
+    Fb: CdrMsg + FeedbackMessage,
+{
+    send_goal: Service<SgReq, SgResp>,
+    get_result: Service<GrReq, GrResp>,
+    cancel_goal: Service<CancelGoalRequest, CancelGoalResponse>,
+    feedback: DdsPub<Fb>,
+    status: DdsPub<GoalStatusArrayMsg>,
+    state: ActionServerState<(), ()>,
+}
+
+impl<SgReq, SgResp, GrReq, GrResp, Fb> ActionServer<SgReq, SgResp, GrReq, GrResp, Fb>
+where
+    SgReq: CdrMsg + SendGoalRequest,
+    SgResp: CdrMsg + SendGoalResponse,
+    GrReq: CdrMsg + GetResultRequest,
+    GrResp: CdrMsg + GetResultResponse,
+    Fb: CdrMsg + FeedbackMessage,
+{
+    /// Bind a server to `action_name` on `dds`.
+    #[must_use]
+    pub fn new(dds: &Dds, action_name: &str) -> Self {
+        let names = ActionNames::new(action_name);
+        Self {
+            send_goal: Service::new(dds, &names.send_goal),
+            get_result: Service::new(dds, &names.get_result),
+            cancel_goal: Service::new(dds, &names.cancel_goal),
+            feedback: dds.publisher::<Fb>(&names.feedback, Qos::Default),
+            status: dds.publisher::<GoalStatusArrayMsg>(&names.status, Qos::Latched),
+            state: ActionServerState::new(),
+        }
+    }
+
+    /// Serve every pending `send_goal` request. `on_goal(goal_id, goal)`
+    /// decides acceptance; accepted goals are registered and moved straight to
+    /// `Executing`. Returns the number of requests served.
+    pub fn serve_goals(&mut self, mut on_goal: impl FnMut(GoalId, &SgReq::Goal) -> bool) -> usize {
+        let state = &mut self.state;
+        self.send_goal.serve_pending(|req| {
+            let id = req.goal_id();
+            let now = Time::now_system();
+            let accepted = on_goal(id, req.goal());
+            if accepted && state.accept(id, now, ()).is_ok() {
+                let _ = state.execute(id);
+            }
+            SgResp::new(accepted, now)
+        })
+    }
+
+    /// Serve every pending `cancel_goal` request with the standard policy:
+    /// live goals move to `Canceling`, terminal goals report
+    /// `ERROR_GOAL_TERMINATED`, unknown ids `ERROR_UNKNOWN_GOAL_ID` (see
+    /// [`ActionServerState::handle_cancel_request`]). Returns requests served.
+    pub fn serve_cancels(&mut self) -> usize {
+        let state = &mut self.state;
+        self.cancel_goal
+            .serve_pending(|req| state.handle_cancel_request(req, Time::now_system()))
+    }
+
+    /// Serve every pending `get_result` request. `on_result(goal_id)` supplies
+    /// the terminal status and result payload; the goal's registered status is
+    /// advanced to match (invalid transitions — e.g. an unknown id — are left
+    /// as-is, exactly like replying about a goal the server never accepted).
+    /// Returns the number of requests served.
+    pub fn serve_results(
+        &mut self,
+        mut on_result: impl FnMut(GoalId) -> (GoalStatus, GrResp::Result),
+    ) -> usize {
+        let state = &mut self.state;
+        self.get_result.serve_pending(|req| {
+            let id = req.goal_id();
+            let (status, result) = on_result(id);
+            let _ = match status {
+                GoalStatus::Succeeded => state.succeed(id, ()),
+                GoalStatus::Aborted => state.abort(id, ()),
+                GoalStatus::Canceled => state.cancel(id, ()),
+                _ => Ok(()),
+            };
+            GrResp::new(status, result)
+        })
+    }
+
+    /// Publish one feedback message for `goal_id`.
+    pub fn publish_feedback(&self, goal_id: GoalId, feedback: Fb::Feedback) {
+        self.feedback.publish(Fb::new(goal_id, feedback));
+    }
+
+    /// Publish the latched status array for every registered goal.
+    pub fn publish_status(&self) {
+        let now = Time::now_system();
+        let statuses = self
+            .state
+            .statuses()
+            .map(|(id, status)| GoalStatusMsg::new(id, now, status))
+            .collect();
+        self.status.publish(GoalStatusArrayMsg::new(statuses));
+    }
+
+    /// Goal ids currently in `Canceling`, for handlers that honor cancellation.
+    pub fn canceling(&self) -> Vec<GoalId> {
+        self.state
+            .statuses()
+            .filter(|(_, status)| *status == GoalStatus::Canceling)
+            .map(|(id, _)| id)
+            .collect()
     }
 }
 

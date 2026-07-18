@@ -147,6 +147,129 @@ fn jazzy_verified_wire_bytes() {
     );
 }
 
+// ---- XCDR2 (PLAIN_CDR2) wire vectors ------------------------------------
+//
+// For a @final struct (every ROS2 type) PLAIN_CDR2 differs from classic CDR
+// only by the `00 07`/`00 06` encapsulation id and by capping 8-byte-primitive
+// alignment at 4. These vectors are hand-derived from OMG DDS-XTypes 1.3
+// §7.4.3.4 and pin the alignment delta byte-for-byte.
+
+#[test]
+fn xcdr2_time_matches_hand_vector() {
+    // No 8-byte fields, so the body equals classic CDR; only the header changes.
+    let body = r#"
+    let t = builtin_interfaces__Time { sec: 1, nanosec: 2 };
+    println!("{}", t.to_cdr_xcdr2(Endian::Little).iter().map(|b| format!("{:02x}", b)).collect::<String>());
+    "#;
+    let out = run_generated(
+        &[("builtin_interfaces", "Time", "int32 sec\nuint32 nanosec\n")],
+        body,
+        "xcdr2_time",
+    );
+    // header 00 07 00 00, then sec=1, nanosec=2.
+    assert_eq!(out.trim(), "000700000100000002000000");
+}
+
+#[test]
+fn xcdr2_string_matches_hand_vector() {
+    let body = r#"
+    let mut m = std_msgs__String { data: RosString::alloc("hi") };
+    println!("{}", m.to_cdr_xcdr2(Endian::Little).iter().map(|b| format!("{:02x}", b)).collect::<String>());
+    unsafe { m.fini(); }
+    "#;
+    let out = run_generated(
+        &[("std_msgs", "String", "string data\n")],
+        body,
+        "xcdr2_str",
+    );
+    // header, len=3 (incl NUL), 'h' 'i' NUL.
+    assert_eq!(out.trim(), "0007000003000000686900");
+}
+
+#[test]
+fn xcdr2_eight_byte_primitive_aligns_to_four() {
+    // {uint8 flag; float64 value; int64 count}: under XCDR2 `value` lands at
+    // body offset 4 (not 8) and `count` at 12 (not 16) — a 20-byte body vs the
+    // 24-byte XCDR1 body. This is the entire XCDR2 wire delta, proven exactly.
+    let src = "uint8 flag\nfloat64 value\nint64 count\n";
+    let body = r#"
+    let m = demo_msgs__Wide { flag: 1, value: 2.0, count: 3 };
+    let x2 = m.to_cdr_xcdr2(Endian::Little);
+    let x1 = m.to_cdr(Endian::Little);
+    println!("{}", x2.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+    println!("{} {}", x1.len(), x2.len());
+    "#;
+    let out = run_generated(&[("demo_msgs", "Wide", src)], body, "xcdr2_wide");
+    let mut lines = out.lines();
+    // header 00 07 00 00 | flag=1 +3pad | value=2.0 @off4 | count=3 @off12.
+    assert_eq!(
+        lines.next().unwrap(),
+        "00070000\
+         01000000\
+         0000000000000040\
+         0300000000000000"
+            .replace(' ', "")
+    );
+    // XCDR1 body is 24 bytes (+4 header), XCDR2 is 20 (+4 header).
+    assert_eq!(lines.next().unwrap(), "28 24");
+}
+
+#[test]
+fn xcdr2_nested_sequence_aligns_to_four() {
+    // A sequence of Point (3×f64): under XCDR2 the first f64 sits right after the
+    // 4-byte length (offset 4), with no 8-byte pad. Proves nested + sequence
+    // element alignment follows the max-align-4 rule.
+    let body = r#"
+    let m = demo_msgs__Cloud {
+        pts: RosSequence::alloc(vec![geometry_msgs__Point { x: 1.0, y: 2.0, z: 3.0 }]),
+    };
+    let x2 = m.to_cdr_xcdr2(Endian::Little);
+    println!("{}", x2.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+    println!("{} {}", m.to_cdr(Endian::Little).len(), x2.len());
+    let mut m = m; unsafe { m.fini(); }
+    "#;
+    let out = run_generated(
+        &[POINT, ("demo_msgs", "Cloud", "geometry_msgs/Point[] pts\n")],
+        body,
+        "xcdr2_cloud",
+    );
+    let mut lines = out.lines();
+    assert_eq!(
+        lines.next().unwrap(),
+        "00070000\
+         01000000\
+         000000000000f03f\
+         0000000000000040\
+         0000000000000840"
+    );
+    // XCDR1 pads 4 bytes after the length before the first f64: 32 vs 28 body.
+    assert_eq!(lines.next().unwrap(), "36 32");
+}
+
+#[test]
+fn xcdr2_round_trips_through_from_cdr() {
+    // `from_cdr` auto-detects the encapsulation id, so an XCDR2 payload decodes
+    // with no extra entry point and re-encodes identically.
+    let body = r#"
+    let m = demo_msgs__Wide { flag: 5, value: -1.5, count: -42 };
+    let bytes = m.to_cdr_xcdr2(Endian::Little);
+    let back = demo_msgs__Wide::from_cdr(&bytes).unwrap();
+    let ok = back.flag == 5 && back.value == -1.5 && back.count == -42;
+    let reser = back.to_cdr_xcdr2(Endian::Little);
+    println!("{} {}", ok, reser == bytes);
+    "#;
+    let out = run_generated(
+        &[(
+            "demo_msgs",
+            "Wide",
+            "uint8 flag\nfloat64 value\nint64 count\n",
+        )],
+        body,
+        "xcdr2_roundtrip",
+    );
+    assert_eq!(out.trim(), "true true");
+}
+
 #[test]
 fn complex_message_round_trips() {
     // Exercises scalars, strings, fixed arrays, sequences, and nested messages.

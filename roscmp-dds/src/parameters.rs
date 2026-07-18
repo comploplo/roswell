@@ -879,6 +879,18 @@ impl<P: MsgPublisher<ParameterEvent>> ParameterServer<P> {
         self.publish_event(vec![Parameter::new(name, value)], vec![], vec![]);
     }
 
+    /// The current value of a locally-held parameter, if declared.
+    #[must_use]
+    pub fn get_local(&self, name: &str) -> Option<&ParameterValue> {
+        self.values.get(name)
+    }
+
+    /// The names of every parameter this server currently holds, sorted.
+    #[must_use]
+    pub fn parameter_names(&self) -> Vec<String> {
+        self.values.keys().cloned().collect()
+    }
+
     pub fn set_local(&mut self, name: impl Into<String>, value: ParameterValue) {
         let name = name.into();
         let is_new = !self.values.contains_key(&name);

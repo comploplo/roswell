@@ -11,10 +11,9 @@ use rustdds::{
     no_key::{
         DataReader, DataWriter, Decode, DefaultDecoder, DeserializerAdapter, SerializerAdapter,
     },
-    policy::{Durability, History, Reliability},
     rpc::SampleIdentity,
-    DomainParticipant, QosPolicies, QosPolicyBuilder, RepresentationIdentifier, StatusEvented,
-    TopicKind, WriteOptionsBuilder,
+    DomainParticipant, QosPolicies, RepresentationIdentifier, StatusEvented, TopicKind,
+    WriteOptionsBuilder,
 };
 
 use crate::codec::service_topics;
@@ -543,6 +542,17 @@ impl RawSampleReader {
         })
     }
 
+    /// The schema text recorded for ROS type `ros_type` (e.g. the concatenated
+    /// `.msg` source rosbag2 stores), if a schema record for that type has been
+    /// parsed and its data is valid UTF-8. Empty-data schemas yield `Some("")`.
+    #[must_use]
+    pub fn schema_text(&self, ros_type: &str) -> Option<&str> {
+        self.schemas
+            .values()
+            .find(|schema| schema.name == ros_type)
+            .and_then(|schema| std::str::from_utf8(&schema.data).ok())
+    }
+
     /// The QoS recorded for `topic`, decoded from its channel metadata, if a
     /// channel record for that topic has been parsed and carries a valid
     /// [`QOS_METADATA_KEY`] entry. Channels are parsed before their messages,
@@ -774,25 +784,7 @@ impl RawQos {
 
     #[must_use]
     pub fn policies(self) -> rustdds::QosPolicies {
-        let b = QosPolicyBuilder::new();
-        let reliable = Reliability::Reliable {
-            max_blocking_time: rustdds::Duration::from_millis(100),
-        };
-        match self {
-            RawQos::Default => b
-                .reliability(reliable)
-                .durability(Durability::Volatile)
-                .history(History::KeepLast { depth: 10 }),
-            RawQos::SensorData => b
-                .reliability(Reliability::BestEffort)
-                .durability(Durability::Volatile)
-                .history(History::KeepLast { depth: 5 }),
-            RawQos::Latched => b
-                .reliability(reliable)
-                .durability(Durability::TransientLocal)
-                .history(History::KeepLast { depth: 1 }),
-        }
-        .build()
+        self.profile().policies()
     }
 }
 
@@ -900,7 +892,7 @@ impl SerializerAdapter<RawPayload> for RawSer {
 #[derive(Clone, Copy)]
 pub struct RawDec;
 
-impl Decode<RawPayload> for RawDec {
+impl Decode<'_, RawPayload> for RawDec {
     type Error = io::Error;
 
     fn decode_bytes(
@@ -1045,6 +1037,8 @@ impl RawService {
 pub struct RawClient {
     reader: DataReader<RawPayload, RawDe>,
     writer: DataWriter<RawPayload, RawSer>,
+    req_matched: i32,
+    resp_matched: i32,
 }
 
 impl RawClient {
@@ -1071,7 +1065,32 @@ impl RawClient {
             .expect("subscriber")
             .create_datareader_no_key(&reply_topic, None)
             .expect("reply reader");
-        Self { reader, writer }
+        Self {
+            reader,
+            writer,
+            req_matched: 0,
+            resp_matched: 0,
+        }
+    }
+
+    /// True once the request writer and reply reader have each matched a peer,
+    /// i.e. a server is discovered end to end. Poll before the first [`call`]:
+    /// a request written while discovery is still in flight is silently dropped
+    /// by the volatile writer. Mirrors [`crate::service::Client::server_is_ready`].
+    ///
+    /// [`call`]: RawClient::call
+    pub fn server_is_ready(&mut self) -> bool {
+        while let Some(status) = self.writer.try_recv_status() {
+            if let rustdds::DataWriterStatus::PublicationMatched { current, .. } = status {
+                self.req_matched = current.count();
+            }
+        }
+        while let Some(status) = self.reader.try_recv_status() {
+            if let rustdds::DataReaderStatus::SubscriptionMatched { current, .. } = status {
+                self.resp_matched = current.count();
+            }
+        }
+        self.req_matched > 0 && self.resp_matched > 0
     }
 
     /// Send `request` (full CDR bytes) and block up to `timeout` for the reply

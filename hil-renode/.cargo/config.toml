@@ -1,0 +1,4 @@
+# Linker wiring for the Cortex-M firmware crate. Target-scoped, so building the
+# host harness (default target) is unaffected.
+[target.thumbv6m-none-eabi]
+rustflags = ["-C", "link-arg=-Tlink.x"]

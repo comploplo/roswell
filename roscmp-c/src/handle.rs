@@ -21,7 +21,10 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use crate::{RcmClient, RcmCtx, RcmMsg, RcmPublisher, RcmService, RcmSubscriber, RcmType};
+use crate::{
+    RcmActionClient, RcmActionServer, RcmBagReader, RcmBagWriter, RcmClient, RcmCtx, RcmMsg,
+    RcmParamServer, RcmPublisher, RcmService, RcmSubscriber, RcmTf, RcmType,
+};
 
 /// Opaque handle: `(generation << 32) | slot`. `0` is never valid (generations
 /// start at 1), so it doubles as the null/error sentinel across the FFI.
@@ -38,6 +41,12 @@ pub enum Kind {
     Service,
     Client,
     Msg,
+    ParamServer,
+    ActionClient,
+    ActionServer,
+    BagWriter,
+    BagReader,
+    Tf,
 }
 
 /// The owned object behind a handle.
@@ -49,6 +58,15 @@ pub enum Payload {
     Service(RcmService),
     Client(RcmClient),
     Msg(RcmMsg),
+    ParamServer(RcmParamServer),
+    // Boxed: an action client bundles five dynamic types and four DDS endpoints,
+    // far larger than any other variant.
+    ActionClient(Box<RcmActionClient>),
+    // Boxed for the same reason: eight dynamic types plus five DDS endpoints.
+    ActionServer(Box<RcmActionServer>),
+    BagWriter(RcmBagWriter),
+    BagReader(RcmBagReader),
+    Tf(Box<RcmTf>),
 }
 
 impl Payload {
@@ -61,6 +79,12 @@ impl Payload {
             Payload::Service(_) => Kind::Service,
             Payload::Client(_) => Kind::Client,
             Payload::Msg(_) => Kind::Msg,
+            Payload::ParamServer(_) => Kind::ParamServer,
+            Payload::ActionClient(_) => Kind::ActionClient,
+            Payload::ActionServer(_) => Kind::ActionServer,
+            Payload::BagWriter(_) => Kind::BagWriter,
+            Payload::BagReader(_) => Kind::BagReader,
+            Payload::Tf(_) => Kind::Tf,
         }
     }
 }

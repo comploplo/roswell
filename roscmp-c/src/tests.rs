@@ -348,3 +348,124 @@ fn concurrent_wait_and_publish() {
         rcm_shutdown(ctx);
     }
 }
+
+/// Read a heap JSON string returned by an `rcm_param_*_json` call and free it.
+unsafe fn take_json_str(ptr: *mut c_char) -> String {
+    assert!(!ptr.is_null(), "null json: {}", last_err());
+    let s = CStr::from_ptr(ptr).to_string_lossy().into_owned();
+    rcm_string_free(ptr);
+    s
+}
+
+/// Declaring scalar parameters through the FFI round-trips each type back out of
+/// `rcm_param_get_json`, lists them, and rejects unsupported/undeclared reads.
+#[test]
+fn param_server_scalar_roundtrip() {
+    unsafe {
+        let ctx = rcm_init(0);
+        let node = cs("param_ffi_node");
+        let server = rcm_param_server(ctx, node.as_ptr());
+        assert_ne!(server, 0, "rcm_param_server: {}", last_err());
+
+        let set = |name: &str, v: &RcmParamValue| {
+            let n = cs(name);
+            assert_eq!(
+                rcm_param_set(server, n.as_ptr(), std::ptr::from_ref(v)),
+                0,
+                "set {name}: {}",
+                last_err()
+            );
+        };
+        let get = |name: &str| -> String {
+            let n = cs(name);
+            take_json_str(rcm_param_get_json(server, n.as_ptr()))
+        };
+
+        set(
+            "enabled",
+            &RcmParamValue {
+                kind: 1,
+                boolean: 1,
+                integer: 0,
+                number: 0.0,
+                text: ptr::null(),
+            },
+        );
+        set(
+            "gain",
+            &RcmParamValue {
+                kind: 2,
+                boolean: 0,
+                integer: 7,
+                number: 0.0,
+                text: ptr::null(),
+            },
+        );
+        set(
+            "speed",
+            &RcmParamValue {
+                kind: 3,
+                boolean: 0,
+                integer: 0,
+                number: 1.5,
+                text: ptr::null(),
+            },
+        );
+        let frame = cs("base_link");
+        set(
+            "frame",
+            &RcmParamValue {
+                kind: 4,
+                boolean: 0,
+                integer: 0,
+                number: 0.0,
+                text: frame.as_ptr(),
+            },
+        );
+
+        assert_eq!(get("enabled"), r#"{"type":"bool","value":true}"#);
+        assert_eq!(get("gain"), r#"{"type":"integer","value":7}"#);
+        assert_eq!(get("speed"), r#"{"type":"double","value":1.5}"#);
+        assert_eq!(get("frame"), r#"{"type":"string","value":"base_link"}"#);
+
+        // Overwrite publishes a changed event and reads back the new value.
+        set(
+            "gain",
+            &RcmParamValue {
+                kind: 2,
+                boolean: 0,
+                integer: 9,
+                number: 0.0,
+                text: ptr::null(),
+            },
+        );
+        assert_eq!(get("gain"), r#"{"type":"integer","value":9}"#);
+
+        // Every name appears in the JSON list.
+        let list = take_json_str(rcm_param_list_json(server));
+        for name in ["enabled", "gain", "speed", "frame"] {
+            assert!(list.contains(name), "list {list} missing {name}");
+        }
+
+        // Undeclared read and unsupported array kind both fail cleanly.
+        let missing = cs("nope");
+        assert!(rcm_param_get_json(server, missing.as_ptr()).is_null());
+        let arr = cs("arr");
+        let bad = RcmParamValue {
+            kind: 7,
+            boolean: 0,
+            integer: 0,
+            number: 0.0,
+            text: ptr::null(),
+        };
+        assert_eq!(
+            rcm_param_set(server, arr.as_ptr(), std::ptr::from_ref(&bad)),
+            RCM_ERR
+        );
+
+        assert_eq!(rcm_param_server_free(server), 0);
+        // Server handle is stale after free.
+        assert_eq!(rcm_param_server_free(server), RCM_ERR_STALE_HANDLE);
+        rcm_shutdown(ctx);
+    }
+}

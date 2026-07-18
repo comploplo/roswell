@@ -26,9 +26,10 @@ pub struct Node {
     timers: Vec<Timer>,
     subscriptions: Vec<Box<dyn Subscription>>,
     services: Vec<Box<dyn ServiceEndpoint>>,
-    // Kept alive so the latched ros_discovery_info sample stays advertised;
-    // the node vanishes from `ros2 node list` when the participant does.
-    _discovery: Option<DiscoveryInfo>,
+    // Kept alive so the latched ros_discovery_info sample stays advertised (the
+    // node vanishes from `ros2 node list` when the participant does), and
+    // updated as endpoints are added so `ros2 node info` lists them.
+    discovery: Option<DiscoveryInfo>,
     shutdown: Arc<AtomicBool>,
     // Waitset: every subscription/service/clock reader registers its data
     // event source here so the executor blocks on `poll` until one is ready
@@ -67,7 +68,7 @@ impl Node {
             timers: Vec::new(),
             subscriptions: Vec::new(),
             services: Vec::new(),
-            _discovery: Some(discovery),
+            discovery: Some(discovery),
             shutdown: Arc::new(AtomicBool::new(false)),
             poll: mio::Poll::new().expect("create mio poll"),
             events: mio::Events::with_capacity(8),
@@ -136,7 +137,7 @@ impl Node {
             timers: Vec::new(),
             subscriptions: Vec::new(),
             services: Vec::new(),
-            _discovery: None,
+            discovery: None,
             shutdown: Arc::new(AtomicBool::new(false)),
             poll: mio::Poll::new().expect("create mio poll"),
             events: mio::Events::with_capacity(8),
@@ -253,6 +254,11 @@ impl Node {
         callback: impl FnMut(M) + 'static,
     ) {
         let mut sub = self.subscriber::<M>(topic, qos);
+        // Advertise the subscriber on ros_discovery_info so `ros2 node info`
+        // lists it (disjoint field borrows: discovery vs. name/namespace).
+        if let Some(discovery) = self.discovery.as_mut() {
+            discovery.add_reader_gid(&self.namespace, &self.name, sub.gid());
+        }
         Self::register_reader(&self.poll, &mut self.next_token, sub.event_source());
         self.subscriptions.push(Box::new(CallbackSub {
             sub,

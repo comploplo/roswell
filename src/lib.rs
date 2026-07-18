@@ -12,6 +12,7 @@ pub mod ir;
 pub mod parser;
 pub mod resolve;
 pub mod typehash;
+pub mod workspace;
 
 pub use idl::parse_idl;
 pub use parser::{ParseError, parse_action, parse_message, parse_service};

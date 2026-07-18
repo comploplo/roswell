@@ -18,10 +18,10 @@ roscmp-verify = { path = "roscmp-verify", version = "0.1.0" }
 workspace = true
 
 [workspace]
-members = [".", "roscmp-dds", "roscmp-c", "roscmp-verify"]
+members = [".", "roscmp-dds", "roscmp-c", "roscmp-verify", "roscmp-tunnel-core", "roscmp-build"]
 # `fuzz/` is a detached cargo-fuzz crate (nightly + libfuzzer only); keep it out
 # of the stable `--workspace` gate. See fuzz/Cargo.toml.
-exclude = ["fuzz"]
+exclude = ["fuzz", "hil-renode"]
 
 [workspace.lints.rust]
 # `--cfg creusot` is set by the Creusot compiler under `cargo creusot`; register

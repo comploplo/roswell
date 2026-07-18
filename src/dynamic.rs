@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 
-use crate::cdr::{CdrError, Endian, Reader, Writer};
+use crate::cdr::{CdrError, Encoding, Endian, Reader, Writer};
 use crate::ir::{Element, Message, MsgId, Prim, Program, ResolvedType};
 
 /// Size (and alignment) of a machine word — the ABI uses `usize`/pointer-sized
@@ -259,7 +259,23 @@ impl DynamicType {
     /// `size` readable elements, and every string must be valid UTF-8.
     #[allow(clippy::unnecessary_wraps)] // Result reserved for FFI symmetry/validation
     pub unsafe fn encode(&self, ptr: *const u8) -> Result<Vec<u8>, DynError> {
-        let mut w = Writer::new(Endian::Little);
+        self.encode_as(ptr, Encoding::Xcdr1)
+    }
+
+    /// Like [`encode`](DynamicType::encode) but selecting the wire [`Encoding`]
+    /// (little-endian). `Xcdr1` reproduces [`encode`] byte-for-byte; `Xcdr2`
+    /// emits PLAIN_CDR2. [`decode`](DynamicType::decode) auto-detects either from
+    /// the encapsulation header, so no matching decode entry point is needed.
+    ///
+    /// # Safety
+    /// Same as [`encode`](DynamicType::encode).
+    #[allow(clippy::unnecessary_wraps)] // Result reserved for FFI symmetry/validation
+    pub unsafe fn encode_as(
+        &self,
+        ptr: *const u8,
+        encoding: Encoding,
+    ) -> Result<Vec<u8>, DynError> {
+        let mut w = Writer::with_encoding(Endian::Little, encoding);
         self.encode_message(&self.root, ptr, &mut w);
         Ok(w.finish())
     }
@@ -311,7 +327,8 @@ impl DynamicType {
     // ---- decode ---------------------------------------------------------
 
     /// Decode a full CDR message into caller-provided struct memory at `out`,
-    /// allocating owned buffers for strings/sequences.
+    /// allocating owned buffers for strings/sequences. The encoding (XCDR1 or
+    /// XCDR2) and endianness are auto-detected from the encapsulation header.
     ///
     /// # Safety
     /// `out` must point to `self.size()` bytes, aligned to `self.align()`, and

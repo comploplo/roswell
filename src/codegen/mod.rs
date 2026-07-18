@@ -10,6 +10,7 @@
 pub mod c;
 pub mod python;
 pub mod rust;
+pub mod rust_nostd;
 
 use crate::ir::MsgId;
 

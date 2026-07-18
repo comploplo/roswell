@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-rustdds = "0.11"
+rustdds = "0.13"
 # Same mio 0.8 that rustdds registers its DataReaders against: the executor
 # waitset registers reader/service/clock event sources and blocks on Poll.
 mio = { version = "0.8", features = ["net", "os-poll"] }
@@ -17,17 +17,27 @@ lz4_flex = "0.13"
 ratatui = "0.29"
 crossterm = "0.28"
 serialport = { version = "4", optional = true }
+# `tokio` feature only: async subscription streams + async service calls.
+# futures-core is already in the tree transitively via rustdds's futures.
+tokio = { version = "1", features = ["rt", "sync", "time"], optional = true }
+futures-core = { version = "0.3", optional = true }
 # Machine-checked pure cores (Creusot): timer scheduling + tunnel queue policy
 # delegate here. Tiny in-workspace crate, no external deps. See docs/RT.md.
 roscmp-verify = { path = "../roscmp-verify", version = "0.1.0" }
+# no_std wire codec shared with no-DDS MCU firmware; `tunnel` pins its frame
+# magic and kind tags to this core so host and firmware agree byte-for-byte.
+roscmp-tunnel-core = { path = "../roscmp-tunnel-core", version = "0.1.0" }
 
 [dev-dependencies]
 # Internal workspace crate (the compiler/runtime core). Used by the
 # byte-equality tests to drive `roscmp::dynamic` against the generated `msgs`.
 roscmp = { path = ".." }
+# For the `tokio`-feature loopback tests (the test file is feature-gated).
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 
 [features]
 serial = ["dep:serialport"]
+tokio = ["dep:tokio", "dep:futures-core"]
 
 [[bin]]
 name = "usb_topic_bridge"

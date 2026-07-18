@@ -51,3 +51,5 @@ wildcards = "deny"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# creusot-std (verify feature only) is unpublished; pinned by rev in roscmp-verify.
+allow-git = ["https://github.com/creusot-rs/creusot"]

@@ -11,7 +11,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENGINE="${CONTAINER_ENGINE:-docker}"
 "$ENGINE" run --rm -v "$ROOT":/work:ro ros:jazzy bash -lc '
 set -e
-cp -r /work /build && cd /build
+# Copy sources only: host target/ dirs are gigabytes of foreign-arch artifacts.
+mkdir /build
+tar -C /work --exclude=target --exclude=./.git --exclude="python/.venv*" \
+    --exclude=python/dist --exclude="*/target" -cf - . | tar -C /build -xf -
+cd /build
 echo "=== installing toolchain + ROS interface packages ==="
 apt-get update -qq >/dev/null 2>&1
 apt-get install -y -qq curl build-essential ros-jazzy-geometry-msgs ros-jazzy-example-interfaces ros-jazzy-demo-nodes-cpp ros-jazzy-rosgraph-msgs ros-jazzy-rcl-interfaces ros-jazzy-tf2-msgs ros-jazzy-lifecycle-msgs ros-jazzy-type-description-interfaces >/dev/null 2>&1
@@ -98,9 +102,15 @@ timeout 20 ros2 action send_goal /fibonacci example_interfaces/action/Fibonacci 
 check 14 "sequence:" /tmp/t14.txt
 
 echo "===== 15. ros_discovery_info: ros2 node list sees our node ====="
-( timeout 20 $B/graph --advertise-node roscmp_discovery_node > /tmp/t15node.txt 2>&1 ) &
+( timeout 28 $B/graph --advertise-node roscmp_discovery_node > /tmp/t15node.txt 2>&1 ) &
 sleep 6; timeout 10 ros2 node list > /tmp/t15.txt 2>&1 || true; sleep 1
 check 15 "roscmp_discovery_node" /tmp/t15.txt
+
+echo "===== 16. ros2 node info sees our node publisher/subscriber ====="
+# Same advertised node (still alive from check 15): its /chatter publisher and
+# /commands subscriber GIDs are registered on ros_discovery_info.
+timeout 10 ros2 node info /roscmp_discovery_node > /tmp/t16.txt 2>&1 || true; sleep 1
+check 16 "/chatter: std_msgs/msg/String" /tmp/t16.txt
 
 echo "===== SUMMARY: $pass passed, $fail failed ====="
 '

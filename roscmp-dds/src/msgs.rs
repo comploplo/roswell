@@ -15,8 +15,15 @@ use core::ffi::c_char;
 // anything that depends on the rest of the crate.
 
 /// CDR representation identifier (first 2 bytes of the encapsulation header).
+/// Classic CDR / XCDR1 (PLAIN_CDR): `00 00` (BE), `00 01` (LE).
 const REPR_CDR_BE: [u8; 2] = [0x00, 0x00];
 const REPR_CDR_LE: [u8; 2] = [0x00, 0x01];
+/// PLAIN_CDR2 / XCDR2 representation identifiers: `00 06` (BE), `00 07` (LE).
+/// Values from OMG DDS-XTypes 1.3 Table 12, cross-checked against eProsima
+/// Fast-CDR `CdrEncoding.hpp` (`PLAIN_CDR2 = 0x6`) — the low nibble is the
+/// encoding flag, the low bit of the byte is endianness (`LITTLE = 0x1`).
+const REPR_CDR2_BE: [u8; 2] = [0x00, 0x06];
+const REPR_CDR2_LE: [u8; 2] = [0x00, 0x07];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Endian {
@@ -31,6 +38,34 @@ impl Endian {
     } else {
         Endian::Big
     };
+}
+
+/// CDR encoding variant selecting the wire representation.
+///
+/// `Xcdr1` is Classic CDR / PLAIN_CDR — ROS2's current on-the-wire default for
+/// `rmw_fastrtps`, `rmw_cyclonedds`, and `rmw_zenoh`. `Xcdr2` is PLAIN_CDR2, the
+/// forward-looking Iron+ / rmw_zenoh representation.
+///
+/// Every ROS2 interface type is `@final`, and for a `@final` struct the *only*
+/// body difference between the two is the **maximum alignment**: XCDR2 caps it
+/// at 4, so 8-byte primitives (`int64`/`uint64`/`float64`) align to 4 instead of
+/// 8. String/sequence framing (a 4-aligned `uint32` length) is identical, and no
+/// DHEADER is emitted — that delimiter is only for appendable/mutable types,
+/// which ROS2 does not use. See OMG DDS-XTypes 1.3 §7.4.2 / §7.4.3.4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encoding {
+    Xcdr1,
+    Xcdr2,
+}
+
+impl Encoding {
+    /// The maximum primitive alignment: 8 for XCDR1, 4 for XCDR2.
+    const fn max_align(self) -> usize {
+        match self {
+            Encoding::Xcdr1 => 8,
+            Encoding::Xcdr2 => 4,
+        }
+    }
 }
 
 /// Tracks the alignment origin so padding is computed relative to the body, not
@@ -67,23 +102,40 @@ pub struct Writer {
     buf: Vec<u8>,
     endian: Endian,
     cursor: Cursor,
+    encoding: Encoding,
 }
 
 impl Writer {
-    /// Start a new message, emitting the encapsulation header.
+    /// Start a new XCDR1 (Classic CDR) message, emitting the encapsulation
+    /// header. Byte-for-byte the historical behavior.
     pub fn new(endian: Endian) -> Self {
+        Self::with_encoding(endian, Encoding::Xcdr1)
+    }
+
+    /// Start a new message with an explicit [`Encoding`], emitting the matching
+    /// encapsulation header.
+    pub fn with_encoding(endian: Endian, encoding: Encoding) -> Self {
         let mut buf = Vec::with_capacity(64);
-        buf.extend_from_slice(match endian {
-            Endian::Little => &REPR_CDR_LE,
-            Endian::Big => &REPR_CDR_BE,
-        });
+        let repr = match (encoding, endian) {
+            (Encoding::Xcdr1, Endian::Little) => REPR_CDR_LE,
+            (Encoding::Xcdr1, Endian::Big) => REPR_CDR_BE,
+            (Encoding::Xcdr2, Endian::Little) => REPR_CDR2_LE,
+            (Encoding::Xcdr2, Endian::Big) => REPR_CDR2_BE,
+        };
+        buf.extend_from_slice(&repr);
         buf.extend_from_slice(&[0x00, 0x00]); // options
         let origin = buf.len();
         Writer {
             buf,
             endian,
             cursor: Cursor { origin },
+            encoding,
         }
+    }
+
+    /// The encoding this writer emits.
+    pub fn encoding(&self) -> Encoding {
+        self.encoding
     }
 
     /// Consume the writer and return the full message (header + body).
@@ -92,6 +144,7 @@ impl Writer {
     }
 
     fn align(&mut self, a: usize) {
+        let a = a.min(self.encoding.max_align());
         let pad = self.cursor.padding(self.buf.len(), a);
         self.buf.resize(self.buf.len() + pad, 0);
     }
@@ -187,17 +240,23 @@ pub struct Reader<'a> {
     pos: usize,
     endian: Endian,
     cursor: Cursor,
+    encoding: Encoding,
 }
 
 impl<'a> Reader<'a> {
-    /// Parse the encapsulation header and position at the body start.
+    /// Parse the encapsulation header and position at the body start. The
+    /// encoding ([`Encoding`]) and endianness are taken from the representation
+    /// identifier, so a reader transparently accepts both XCDR1 (`00 00`/`00 01`)
+    /// and PLAIN_CDR2 (`00 06`/`00 07`) payloads.
     pub fn new(buf: &'a [u8]) -> Result<Self, CdrError> {
         if buf.len() < 4 {
             return Err(CdrError::BadEncapsulation);
         }
-        let endian = match [buf[0], buf[1]] {
-            REPR_CDR_LE => Endian::Little,
-            REPR_CDR_BE => Endian::Big,
+        let (endian, encoding) = match [buf[0], buf[1]] {
+            REPR_CDR_LE => (Endian::Little, Encoding::Xcdr1),
+            REPR_CDR_BE => (Endian::Big, Encoding::Xcdr1),
+            REPR_CDR2_LE => (Endian::Little, Encoding::Xcdr2),
+            REPR_CDR2_BE => (Endian::Big, Encoding::Xcdr2),
             _ => return Err(CdrError::BadEncapsulation),
         };
         Ok(Reader {
@@ -205,6 +264,7 @@ impl<'a> Reader<'a> {
             pos: 4,
             endian,
             cursor: Cursor { origin: 4 },
+            encoding,
         })
     }
 
@@ -212,7 +272,13 @@ impl<'a> Reader<'a> {
         self.endian
     }
 
+    /// The encoding detected from the encapsulation header.
+    pub fn encoding(&self) -> Encoding {
+        self.encoding
+    }
+
     fn align(&mut self, a: usize) {
+        let a = a.min(self.encoding.max_align());
         self.pos += self.cursor.padding(self.pos, a);
     }
 
@@ -518,6 +584,11 @@ impl builtin_interfaces__Time {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_i32(self.sec);
@@ -619,6 +690,11 @@ pub struct std_msgs__Header {
 impl std_msgs__Header {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -726,6 +802,11 @@ pub struct diagnostic_msgs__DiagnosticArray {
 impl diagnostic_msgs__DiagnosticArray {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -858,6 +939,11 @@ pub struct diagnostic_msgs__DiagnosticStatus {
 impl diagnostic_msgs__DiagnosticStatus {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -994,6 +1080,11 @@ impl diagnostic_msgs__KeyValue {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_string(self.key.as_str());
@@ -1098,6 +1189,11 @@ pub struct example_interfaces__AddTwoInts_Request {
 impl example_interfaces__AddTwoInts_Request {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -1206,6 +1302,11 @@ impl example_interfaces__AddTwoInts_Response {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_i64(self.sum);
@@ -1304,6 +1405,11 @@ pub struct example_interfaces__Fibonacci_Feedback {
 impl example_interfaces__Fibonacci_Feedback {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -1426,6 +1532,11 @@ impl unique_identifier_msgs__UUID {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         for __e in &self.uuid {
@@ -1536,6 +1647,11 @@ pub struct example_interfaces__Fibonacci_FeedbackMessage {
 impl example_interfaces__Fibonacci_FeedbackMessage {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -1658,6 +1774,11 @@ impl example_interfaces__Fibonacci_GetResult_Request {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         self.goal_id.serialize_into(w);
@@ -1767,6 +1888,11 @@ pub struct example_interfaces__Fibonacci_Result {
 impl example_interfaces__Fibonacci_Result {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -1889,6 +2015,11 @@ impl example_interfaces__Fibonacci_GetResult_Response {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_i8(self.status);
@@ -2008,6 +2139,11 @@ impl example_interfaces__Fibonacci_Goal {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_i32(self.order);
@@ -2109,6 +2245,11 @@ pub struct example_interfaces__Fibonacci_SendGoal_Request {
 impl example_interfaces__Fibonacci_SendGoal_Request {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -2233,6 +2374,11 @@ impl example_interfaces__Fibonacci_SendGoal_Response {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_bool(self.accepted);
@@ -2352,6 +2498,11 @@ impl geometry_msgs__Point {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_f64(self.x);
@@ -2457,6 +2608,11 @@ pub struct geometry_msgs__Quaternion {
 impl geometry_msgs__Quaternion {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -2568,6 +2724,11 @@ impl geometry_msgs__Pose {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         self.position.serialize_into(w);
@@ -2672,6 +2833,11 @@ pub struct geometry_msgs__PoseStamped {
 impl geometry_msgs__PoseStamped {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -2783,6 +2949,11 @@ impl geometry_msgs__Vector3 {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_f64(self.x);
@@ -2886,6 +3057,11 @@ pub struct geometry_msgs__Transform {
 impl geometry_msgs__Transform {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -2994,6 +3170,11 @@ pub struct geometry_msgs__TransformStamped {
 impl geometry_msgs__TransformStamped {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -3109,6 +3290,11 @@ impl geometry_msgs__Twist {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         self.linear.serialize_into(w);
@@ -3221,6 +3407,11 @@ impl lifecycle_msgs__Transition {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_u8(self.id);
@@ -3323,6 +3514,11 @@ pub struct lifecycle_msgs__ChangeState_Request {
 impl lifecycle_msgs__ChangeState_Request {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -3431,6 +3627,11 @@ impl lifecycle_msgs__ChangeState_Response {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_bool(self.success);
@@ -3529,6 +3730,11 @@ pub struct lifecycle_msgs__GetState_Request {}
 impl lifecycle_msgs__GetState_Request {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -3643,6 +3849,11 @@ impl lifecycle_msgs__State {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_u8(self.id);
@@ -3748,6 +3959,11 @@ impl lifecycle_msgs__GetState_Response {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         self.current_state.serialize_into(w);
@@ -3850,6 +4066,11 @@ pub struct rcl_interfaces__DescribeParameters_Request {
 impl rcl_interfaces__DescribeParameters_Request {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -3971,6 +4192,11 @@ pub struct rcl_interfaces__DescribeParameters_Response {
 impl rcl_interfaces__DescribeParameters_Response {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -4097,6 +4323,11 @@ impl rcl_interfaces__FloatingPointRange {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_f64(self.from_value);
@@ -4201,6 +4432,11 @@ pub struct rcl_interfaces__GetParameterTypes_Request {
 impl rcl_interfaces__GetParameterTypes_Request {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -4325,6 +4561,11 @@ impl rcl_interfaces__GetParameterTypes_Response {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_seq_len(self.types.size);
@@ -4440,6 +4681,11 @@ pub struct rcl_interfaces__GetParameters_Request {
 impl rcl_interfaces__GetParameters_Request {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -4561,6 +4807,11 @@ pub struct rcl_interfaces__GetParameters_Response {
 impl rcl_interfaces__GetParameters_Response {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -4687,6 +4938,11 @@ impl rcl_interfaces__IntegerRange {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_i64(self.from_value);
@@ -4790,6 +5046,11 @@ pub struct rcl_interfaces__ListParametersResult {
 impl rcl_interfaces__ListParametersResult {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -4935,6 +5196,11 @@ impl rcl_interfaces__ListParameters_Request {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_seq_len(self.prefixes.size);
@@ -5058,6 +5324,11 @@ impl rcl_interfaces__ListParameters_Response {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         self.result.serialize_into(w);
@@ -5171,6 +5442,11 @@ pub struct rcl_interfaces__Log {
 impl rcl_interfaces__Log {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -5299,6 +5575,11 @@ pub struct rcl_interfaces__ParameterValue {
 impl rcl_interfaces__ParameterValue {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -5506,6 +5787,11 @@ impl rcl_interfaces__Parameter {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_string(self.name.as_str());
@@ -5616,6 +5902,11 @@ pub struct rcl_interfaces__ParameterDescriptor {
 impl rcl_interfaces__ParameterDescriptor {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -5779,6 +6070,11 @@ pub struct rcl_interfaces__ParameterEvent {
 impl rcl_interfaces__ParameterEvent {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -5950,6 +6246,11 @@ impl rcl_interfaces__SetParametersAtomically_Request {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_seq_len(self.parameters.size);
@@ -6072,6 +6373,11 @@ impl rcl_interfaces__SetParametersResult {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_bool(self.successful);
@@ -6179,6 +6485,11 @@ impl rcl_interfaces__SetParametersAtomically_Response {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         self.result.serialize_into(w);
@@ -6281,6 +6592,11 @@ pub struct rcl_interfaces__SetParameters_Request {
 impl rcl_interfaces__SetParameters_Request {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -6405,6 +6721,11 @@ impl rcl_interfaces__SetParameters_Response {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_seq_len(self.results.size);
@@ -6526,6 +6847,11 @@ impl rmw_dds_common__Gid {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         for __e in &self.data {
@@ -6638,6 +6964,11 @@ pub struct rmw_dds_common__NodeEntitiesInfo {
 impl rmw_dds_common__NodeEntitiesInfo {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -6790,6 +7121,11 @@ impl rmw_dds_common__ParticipantEntitiesInfo {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         self.gid.serialize_into(w);
@@ -6918,6 +7254,11 @@ pub struct sensor_msgs__Imu {
 impl sensor_msgs__Imu {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -7072,6 +7413,11 @@ impl std_msgs__String {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_string(self.data.as_str());
@@ -7172,6 +7518,11 @@ pub struct tf2_msgs__TFMessage {
 impl tf2_msgs__TFMessage {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -7298,6 +7649,11 @@ impl turtlesim__Pose {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_f32(self.x);
@@ -7407,6 +7763,11 @@ pub struct type_description_interfaces__FieldType {
 impl type_description_interfaces__FieldType {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -7523,6 +7884,11 @@ impl type_description_interfaces__Field {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_string(self.name.as_str());
@@ -7636,6 +8002,11 @@ impl type_description_interfaces__GetTypeDescription_Request {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_string(self.type_name.as_str());
@@ -7745,6 +8116,11 @@ pub struct type_description_interfaces__IndividualTypeDescription {
 impl type_description_interfaces__IndividualTypeDescription {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -7872,6 +8248,11 @@ pub struct type_description_interfaces__TypeDescription {
 impl type_description_interfaces__TypeDescription {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -8006,6 +8387,11 @@ pub struct type_description_interfaces__GetTypeDescription_Response {
 impl type_description_interfaces__GetTypeDescription_Response {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }
@@ -8161,6 +8547,11 @@ impl type_description_interfaces__KeyValue {
         self.serialize_into(&mut w);
         w.finish()
     }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
 
     pub fn serialize_into(&self, w: &mut Writer) {
         w.write_string(self.key.as_str());
@@ -8268,6 +8659,11 @@ pub struct type_description_interfaces__TypeSource {
 impl type_description_interfaces__TypeSource {
     pub fn to_cdr(&self, endian: Endian) -> Vec<u8> {
         let mut w = Writer::new(endian);
+        self.serialize_into(&mut w);
+        w.finish()
+    }
+    pub fn to_cdr_xcdr2(&self, endian: Endian) -> Vec<u8> {
+        let mut w = Writer::with_encoding(endian, Encoding::Xcdr2);
         self.serialize_into(&mut w);
         w.finish()
     }

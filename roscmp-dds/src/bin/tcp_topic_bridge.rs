@@ -15,6 +15,12 @@ use roscmp_dds::tunnel::{
     TopicBridgeRxConfig, TopicBridgeTxConfig, TopicRoute, TunnelReliabilityHandle,
 };
 
+#[path = "shared/argcursor.rs"]
+mod argcursor;
+use argcursor::ArgCursor;
+
+const USAGE: &str = "usage: tcp_topic_bridge <serve|connect> ADDR [--domain N] [--tx /topic:pkg/msg/Type] [--rx /topic:pkg/msg/Type]";
+
 fn main() -> io::Result<()> {
     let args = Args::parse()?;
     let stream = match args.mode {
@@ -134,50 +140,30 @@ struct Args {
 
 impl Args {
     fn parse() -> io::Result<Self> {
-        let mut iter = std::env::args().skip(1);
-        let mode = match iter.next().as_deref() {
+        let mut c = ArgCursor::new(USAGE);
+        let mode = match c.next_arg().as_deref() {
             Some("serve") => Mode::Serve,
             Some("connect") => Mode::Connect,
-            _ => return Err(usage()),
-        };
-        let Some(addr) = iter.next() else {
-            return Err(usage());
+            _ => return Err(c.usage()),
         };
         let mut args = Self {
             mode,
-            addr,
+            addr: c.value()?,
             domain: 0,
             tx: Vec::new(),
             rx: Vec::new(),
         };
-        while let Some(arg) = iter.next() {
+        while let Some(arg) = c.next_arg() {
             match arg.as_str() {
-                "--domain" => {
-                    args.domain = iter
-                        .next()
-                        .ok_or_else(usage)?
-                        .parse()
-                        .map_err(|_| usage())?;
-                }
-                "--tx" => args
-                    .tx
-                    .push(TopicRoute::parse(&iter.next().ok_or_else(usage)?)?),
-                "--rx" => args
-                    .rx
-                    .push(TopicRoute::parse(&iter.next().ok_or_else(usage)?)?),
-                _ => return Err(usage()),
+                "--domain" => args.domain = c.parse()?,
+                "--tx" => args.tx.push(TopicRoute::parse(&c.value()?)?),
+                "--rx" => args.rx.push(TopicRoute::parse(&c.value()?)?),
+                _ => return Err(c.usage()),
             }
         }
         if args.tx.is_empty() && args.rx.is_empty() {
-            return Err(usage());
+            return Err(c.usage());
         }
         Ok(args)
     }
-}
-
-fn usage() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidInput,
-        "usage: tcp_topic_bridge <serve|connect> ADDR [--domain N] [--tx /topic:pkg/msg/Type] [--rx /topic:pkg/msg/Type]",
-    )
 }

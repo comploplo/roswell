@@ -9,11 +9,16 @@
 //! `fini` (twice — must be idempotent) then `dealloc`, so LeakSanitizer flags
 //! any buffer the codec allocates but fails to link back to `out` (e.g. a
 //! partial sequence on a truncated decode). Any panic, leak, or UB is a finding.
+//!
+//! The raw fuzz bytes carry their own encapsulation header, so both XCDR1
+//! (`00 00`/`00 01`) and PLAIN_CDR2 (`00 06`/`00 07`) decode paths are explored
+//! for free; we additionally round-trip through the XCDR2 *encode* path.
 
 use std::sync::OnceLock;
 
 use libfuzzer_sys::fuzz_target;
 
+use roscmp::cdr::Encoding;
 use roscmp::dynamic::DynamicType;
 use roscmp::ir::MsgId;
 use roscmp::{parse_message, resolve};
@@ -114,6 +119,19 @@ fuzz_target!(|data: &[u8]| {
                 assert_eq!(once, twice, "encode/decode not idempotent");
                 ty.fini(buf2);
                 ty.dealloc(buf2);
+
+                // Same idempotence through the XCDR2 encode path: encode the
+                // decoded message as PLAIN_CDR2, decode that (auto-detected)
+                // into fresh memory, and re-encode — the two XCDR2 buffers must
+                // match. Exercises the new max-align-4 encode + decode.
+                let x2 = ty.encode_as(buf, Encoding::Xcdr2).unwrap();
+                let buf3 = ty.alloc_zeroed();
+                ty.decode(&x2, buf3)
+                    .expect("re-decode of our own XCDR2 encoding must succeed");
+                let x2_again = ty.encode_as(buf3, Encoding::Xcdr2).unwrap();
+                assert_eq!(x2, x2_again, "xcdr2 encode/decode not idempotent");
+                ty.fini(buf3);
+                ty.dealloc(buf3);
             }
             // On both the ok and err paths the message must be safe to fini
             // (idempotently) and free — no leaked buffers, no double free.

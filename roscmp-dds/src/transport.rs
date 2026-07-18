@@ -6,7 +6,7 @@
 
 use rustdds::{
     no_key::{DataReader, DataWriter},
-    DomainParticipant, DomainParticipantBuilder, QosPolicies, StatusEvented, TopicKind,
+    DomainParticipant, DomainParticipantBuilder, QosPolicies, RTPSEntity, StatusEvented, TopicKind,
 };
 
 use crate::codec::{topic, CdrMsg, De, Ser};
@@ -64,7 +64,10 @@ impl Dds {
     /// profile (reliable/volatile), used for services; per-topic pub/sub QoS is
     /// chosen at endpoint creation via [`Qos`].
     pub fn new(domain: u16) -> Self {
+        // 16 MiB SO_RCVBUF so multi-MB fragment bursts (pointclouds, images)
+        // survive; kernel clamps to net.core.rmem_max on Linux — raise it there.
         let participant = DomainParticipantBuilder::new(domain)
+            .socket_receive_buffer_size(16 * 1024 * 1024)
             .build()
             .expect("create DomainParticipant");
         Dds {
@@ -93,6 +96,13 @@ impl<M: CdrMsg> MsgPublisher<M> for DdsPub<M> {
     }
 }
 impl<M: CdrMsg> DdsPub<M> {
+    /// The writer's 16-byte ROS GID (its DDS GUID: 12-byte prefix + 4-byte
+    /// entity id), for advertising this endpoint on `ros_discovery_info`.
+    #[must_use]
+    pub fn gid(&self) -> [u8; 16] {
+        self.writer.guid().to_bytes()
+    }
+
     /// Drain pending QoS status events (deadline missed, incompatible QoS,
     /// liveliness lost, publication matched). Non-blocking; returns `[]` when
     /// nothing is queued.
@@ -118,6 +128,13 @@ impl<M: CdrMsg> MsgSubscriber<M> for DdsSub<M> {
     }
 }
 impl<M: CdrMsg> DdsSub<M> {
+    /// The reader's 16-byte ROS GID (its DDS GUID: 12-byte prefix + 4-byte
+    /// entity id), for advertising this endpoint on `ros_discovery_info`.
+    #[must_use]
+    pub fn gid(&self) -> [u8; 16] {
+        self.reader.guid().to_bytes()
+    }
+
     /// Drain pending QoS status events (deadline missed, incompatible QoS,
     /// liveliness changed, sample lost/rejected, subscription matched).
     /// Non-blocking; returns `[]` when nothing is queued.

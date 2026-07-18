@@ -1,0 +1,465 @@
+// no_std CDR (Classic CDR / XCDR1, plus PLAIN_CDR2 / XCDR2) runtime over
+// caller-provided `&mut [u8]` buffers: no heap, no `alloc`, `core` only. This
+// file is embedded verbatim into `--no-std` generated bindings so they are
+// self-contained. For values that fit their capacities, the bytes produced here
+// are byte-identical to `src/cdr_runtime.rs` (the std runtime) — pinned by
+// `tests/nostd_codegen_tests.rs`. Keep it free of inner attributes and of
+// anything that depends on the rest of the crate.
+
+/// CDR representation identifier (first 2 bytes of the encapsulation header).
+/// Classic CDR / XCDR1 (PLAIN_CDR): `00 00` (BE), `00 01` (LE).
+const REPR_CDR_BE: [u8; 2] = [0x00, 0x00];
+const REPR_CDR_LE: [u8; 2] = [0x00, 0x01];
+/// PLAIN_CDR2 / XCDR2 representation identifiers: `00 06` (BE), `00 07` (LE).
+const REPR_CDR2_BE: [u8; 2] = [0x00, 0x06];
+const REPR_CDR2_LE: [u8; 2] = [0x00, 0x07];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Endian {
+    Little,
+    Big,
+}
+
+impl Endian {
+    /// The native endianness of the host.
+    pub const NATIVE: Endian = if cfg!(target_endian = "little") {
+        Endian::Little
+    } else {
+        Endian::Big
+    };
+}
+
+/// CDR encoding variant selecting the wire representation. Same semantics as
+/// the std runtime: for ROS2's `@final` structs the only body difference is
+/// that XCDR2 caps primitive alignment at 4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encoding {
+    Xcdr1,
+    Xcdr2,
+}
+
+impl Encoding {
+    /// The maximum primitive alignment: 8 for XCDR1, 4 for XCDR2.
+    const fn max_align(self) -> usize {
+        match self {
+            Encoding::Xcdr1 => 8,
+            Encoding::Xcdr2 => 4,
+        }
+    }
+}
+
+/// Padding bytes to advance an offset `off` (measured from the alignment
+/// origin) up to the next multiple of `a`. Identical to the std runtime's
+/// (Creusot-pinned) formula.
+fn pad_to(off: usize, a: usize) -> usize {
+    (a - (off % a)) % a
+}
+
+/// Error encoding or decoding a CDR buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CdrError {
+    /// Input ended in the middle of a value.
+    Truncated,
+    /// Invalid encapsulation header.
+    BadEncapsulation,
+    /// A string was not valid UTF-8.
+    BadUtf8,
+    /// A string was missing its NUL terminator (or had length 0).
+    BadString,
+    /// The caller-provided output buffer is too small for the encoded message.
+    BufferFull,
+    /// A decoded string or sequence exceeds its fixed capacity. Nothing is
+    /// truncated: the whole decode fails.
+    CapacityExceeded,
+}
+
+impl core::fmt::Display for CdrError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let s = match self {
+            CdrError::Truncated => "unexpected end of CDR buffer",
+            CdrError::BadEncapsulation => "invalid CDR encapsulation header",
+            CdrError::BadUtf8 => "string is not valid UTF-8",
+            CdrError::BadString => "string is missing its NUL terminator",
+            CdrError::BufferFull => "output buffer too small for encoded message",
+            CdrError::CapacityExceeded => "value exceeds fixed no_std capacity",
+        };
+        f.write_str(s)
+    }
+}
+
+impl core::error::Error for CdrError {}
+
+/// A fixed-capacity, heapless UTF-8 string (capacity `N` bytes).
+///
+/// # Invariant
+/// `len <= N` and `buf[..len]` is valid UTF-8 — upheld because the fields are
+/// private and every constructor copies from a `&str`.
+#[derive(Clone, Copy)]
+pub struct BoundedString<const N: usize> {
+    buf: [u8; N],
+    len: usize,
+}
+
+impl<const N: usize> BoundedString<N> {
+    /// The empty string.
+    pub const fn new() -> Self {
+        Self { buf: [0; N], len: 0 }
+    }
+
+    /// Copy `s` in; fails with [`CdrError::CapacityExceeded`] if it does not
+    /// fit (no truncation).
+    pub fn try_from_str(s: &str) -> Result<Self, CdrError> {
+        let bytes = s.as_bytes();
+        if bytes.len() > N {
+            return Err(CdrError::CapacityExceeded);
+        }
+        let mut buf = [0u8; N];
+        buf[..bytes.len()].copy_from_slice(bytes);
+        Ok(Self { buf, len: bytes.len() })
+    }
+
+    /// Borrow the string contents.
+    pub fn as_str(&self) -> &str {
+        // By the type invariant `buf[..len]` is valid UTF-8; the fallback is
+        // unreachable but keeps this panic- and unsafe-free.
+        core::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
+    }
+
+    /// Length in bytes.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether the string is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl<const N: usize> Default for BoundedString<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A fixed-capacity, heapless sequence (capacity `N` elements).
+pub struct BoundedVec<T, const N: usize> {
+    items: [T; N],
+    len: usize,
+}
+
+impl<T: Default, const N: usize> BoundedVec<T, N> {
+    /// The empty sequence (unused slots hold `T::default()`).
+    pub fn new() -> Self {
+        Self {
+            items: core::array::from_fn(|_| T::default()),
+            len: 0,
+        }
+    }
+}
+
+impl<T, const N: usize> BoundedVec<T, N> {
+    /// Append `v`; fails with [`CdrError::CapacityExceeded`] when full.
+    pub fn push(&mut self, v: T) -> Result<(), CdrError> {
+        let slot = self.items.get_mut(self.len).ok_or(CdrError::CapacityExceeded)?;
+        *slot = v;
+        self.len += 1;
+        Ok(())
+    }
+
+    /// Borrow the live elements.
+    pub fn as_slice(&self) -> &[T] {
+        &self.items[..self.len]
+    }
+
+    /// Number of elements.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether the sequence has no elements.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl<T: Default, const N: usize> Default for BoundedVec<T, N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Serializes values into a caller-provided CDR byte buffer.
+#[derive(Debug)]
+pub struct Writer<'a> {
+    buf: &'a mut [u8],
+    pos: usize,
+    endian: Endian,
+    encoding: Encoding,
+}
+
+impl<'a> Writer<'a> {
+    /// Start a new XCDR1 (Classic CDR) message, emitting the encapsulation
+    /// header into `buf`.
+    pub fn new(buf: &'a mut [u8], endian: Endian) -> Result<Self, CdrError> {
+        Self::with_encoding(buf, endian, Encoding::Xcdr1)
+    }
+
+    /// Start a new message with an explicit [`Encoding`].
+    pub fn with_encoding(
+        buf: &'a mut [u8],
+        endian: Endian,
+        encoding: Encoding,
+    ) -> Result<Self, CdrError> {
+        let repr = match (encoding, endian) {
+            (Encoding::Xcdr1, Endian::Little) => REPR_CDR_LE,
+            (Encoding::Xcdr1, Endian::Big) => REPR_CDR_BE,
+            (Encoding::Xcdr2, Endian::Little) => REPR_CDR2_LE,
+            (Encoding::Xcdr2, Endian::Big) => REPR_CDR2_BE,
+        };
+        let header = buf.get_mut(..4).ok_or(CdrError::BufferFull)?;
+        header[..2].copy_from_slice(&repr);
+        header[2..].copy_from_slice(&[0x00, 0x00]); // options
+        Ok(Writer {
+            buf,
+            pos: 4,
+            endian,
+            encoding,
+        })
+    }
+
+    /// The encoding this writer emits.
+    pub fn encoding(&self) -> Encoding {
+        self.encoding
+    }
+
+    /// Total bytes written (header + body).
+    pub fn finish(self) -> usize {
+        self.pos
+    }
+
+    fn align(&mut self, a: usize) -> Result<(), CdrError> {
+        let a = a.min(self.encoding.max_align());
+        // Padding is relative to the body origin (byte 4, after the header).
+        let pad = pad_to(self.pos - 4, a);
+        let dst = self
+            .buf
+            .get_mut(self.pos..self.pos + pad)
+            .ok_or(CdrError::BufferFull)?;
+        dst.fill(0);
+        self.pos += pad;
+        Ok(())
+    }
+
+    fn put(&mut self, bytes: &[u8]) -> Result<(), CdrError> {
+        let end = self.pos.checked_add(bytes.len()).ok_or(CdrError::BufferFull)?;
+        let dst = self.buf.get_mut(self.pos..end).ok_or(CdrError::BufferFull)?;
+        dst.copy_from_slice(bytes);
+        self.pos = end;
+        Ok(())
+    }
+
+    fn put_endian(&mut self, le: &[u8], be: &[u8]) -> Result<(), CdrError> {
+        match self.endian {
+            Endian::Little => self.put(le),
+            Endian::Big => self.put(be),
+        }
+    }
+
+    pub fn write_u8(&mut self, v: u8) -> Result<(), CdrError> {
+        self.put(&[v])
+    }
+    pub fn write_i8(&mut self, v: i8) -> Result<(), CdrError> {
+        self.put(&[v as u8])
+    }
+    pub fn write_bool(&mut self, v: bool) -> Result<(), CdrError> {
+        self.put(&[u8::from(v)])
+    }
+
+    pub fn write_u16(&mut self, v: u16) -> Result<(), CdrError> {
+        self.align(2)?;
+        self.put_endian(&v.to_le_bytes(), &v.to_be_bytes())
+    }
+    pub fn write_i16(&mut self, v: i16) -> Result<(), CdrError> {
+        self.write_u16(v as u16)
+    }
+
+    pub fn write_u32(&mut self, v: u32) -> Result<(), CdrError> {
+        self.align(4)?;
+        self.put_endian(&v.to_le_bytes(), &v.to_be_bytes())
+    }
+    pub fn write_i32(&mut self, v: i32) -> Result<(), CdrError> {
+        self.write_u32(v as u32)
+    }
+    pub fn write_f32(&mut self, v: f32) -> Result<(), CdrError> {
+        self.write_u32(v.to_bits())
+    }
+
+    pub fn write_u64(&mut self, v: u64) -> Result<(), CdrError> {
+        self.align(8)?;
+        self.put_endian(&v.to_le_bytes(), &v.to_be_bytes())
+    }
+    pub fn write_i64(&mut self, v: i64) -> Result<(), CdrError> {
+        self.write_u64(v as u64)
+    }
+    pub fn write_f64(&mut self, v: f64) -> Result<(), CdrError> {
+        self.write_u64(v.to_bits())
+    }
+
+    /// Write a `string`: `uint32` length incl. NUL, bytes, then NUL.
+    pub fn write_string(&mut self, s: &str) -> Result<(), CdrError> {
+        let bytes = s.as_bytes();
+        self.write_u32((bytes.len() + 1) as u32)?;
+        self.put(bytes)?;
+        self.put(&[0])
+    }
+
+    /// Write a sequence length prefix (`uint32` element count).
+    pub fn write_seq_len(&mut self, n: usize) -> Result<(), CdrError> {
+        self.write_u32(n as u32)
+    }
+}
+
+/// Deserializes values from a CDR byte buffer.
+#[derive(Debug)]
+pub struct Reader<'a> {
+    buf: &'a [u8],
+    pos: usize,
+    endian: Endian,
+    encoding: Encoding,
+}
+
+impl<'a> Reader<'a> {
+    /// Parse the encapsulation header and position at the body start. Accepts
+    /// both XCDR1 (`00 00`/`00 01`) and PLAIN_CDR2 (`00 06`/`00 07`) payloads.
+    pub fn new(buf: &'a [u8]) -> Result<Self, CdrError> {
+        if buf.len() < 4 {
+            return Err(CdrError::BadEncapsulation);
+        }
+        let (endian, encoding) = match [buf[0], buf[1]] {
+            REPR_CDR_LE => (Endian::Little, Encoding::Xcdr1),
+            REPR_CDR_BE => (Endian::Big, Encoding::Xcdr1),
+            REPR_CDR2_LE => (Endian::Little, Encoding::Xcdr2),
+            REPR_CDR2_BE => (Endian::Big, Encoding::Xcdr2),
+            _ => return Err(CdrError::BadEncapsulation),
+        };
+        Ok(Reader {
+            buf,
+            pos: 4,
+            endian,
+            encoding,
+        })
+    }
+
+    pub fn endian(&self) -> Endian {
+        self.endian
+    }
+
+    /// The encoding detected from the encapsulation header.
+    pub fn encoding(&self) -> Encoding {
+        self.encoding
+    }
+
+    fn align(&mut self, a: usize) {
+        let a = a.min(self.encoding.max_align());
+        self.pos += pad_to(self.pos - 4, a);
+    }
+
+    fn take(&mut self, n: usize) -> Result<&'a [u8], CdrError> {
+        let end = self.pos.checked_add(n).ok_or(CdrError::Truncated)?;
+        let slice = self.buf.get(self.pos..end).ok_or(CdrError::Truncated)?;
+        self.pos = end;
+        Ok(slice)
+    }
+
+    fn get<const N: usize>(&mut self, a: usize) -> Result<[u8; N], CdrError> {
+        self.align(a);
+        let slice = self.take(N)?;
+        let mut arr = [0u8; N];
+        arr.copy_from_slice(slice);
+        Ok(arr)
+    }
+
+    fn decode_u16(&self, b: [u8; 2]) -> u16 {
+        match self.endian {
+            Endian::Little => u16::from_le_bytes(b),
+            Endian::Big => u16::from_be_bytes(b),
+        }
+    }
+    fn decode_u32(&self, b: [u8; 4]) -> u32 {
+        match self.endian {
+            Endian::Little => u32::from_le_bytes(b),
+            Endian::Big => u32::from_be_bytes(b),
+        }
+    }
+    fn decode_u64(&self, b: [u8; 8]) -> u64 {
+        match self.endian {
+            Endian::Little => u64::from_le_bytes(b),
+            Endian::Big => u64::from_be_bytes(b),
+        }
+    }
+
+    pub fn read_u8(&mut self) -> Result<u8, CdrError> {
+        Ok(self.take(1)?[0])
+    }
+    pub fn read_i8(&mut self) -> Result<i8, CdrError> {
+        Ok(self.read_u8()? as i8)
+    }
+    pub fn read_bool(&mut self) -> Result<bool, CdrError> {
+        Ok(self.read_u8()? != 0)
+    }
+
+    pub fn read_u16(&mut self) -> Result<u16, CdrError> {
+        let b = self.get::<2>(2)?;
+        Ok(self.decode_u16(b))
+    }
+    pub fn read_i16(&mut self) -> Result<i16, CdrError> {
+        Ok(self.read_u16()? as i16)
+    }
+
+    pub fn read_u32(&mut self) -> Result<u32, CdrError> {
+        let b = self.get::<4>(4)?;
+        Ok(self.decode_u32(b))
+    }
+    pub fn read_i32(&mut self) -> Result<i32, CdrError> {
+        Ok(self.read_u32()? as i32)
+    }
+    pub fn read_f32(&mut self) -> Result<f32, CdrError> {
+        Ok(f32::from_bits(self.read_u32()?))
+    }
+
+    pub fn read_u64(&mut self) -> Result<u64, CdrError> {
+        let b = self.get::<8>(8)?;
+        Ok(self.decode_u64(b))
+    }
+    pub fn read_i64(&mut self) -> Result<i64, CdrError> {
+        Ok(self.read_u64()? as i64)
+    }
+    pub fn read_f64(&mut self) -> Result<f64, CdrError> {
+        Ok(f64::from_bits(self.read_u64()?))
+    }
+
+    /// Read a `string` (length incl. NUL, bytes, NUL), borrowing from the
+    /// input buffer — no copy, no allocation.
+    pub fn read_str(&mut self) -> Result<&'a str, CdrError> {
+        let len = self.read_u32()? as usize;
+        if len == 0 {
+            return Err(CdrError::BadString);
+        }
+        let bytes = self.take(len)?;
+        if bytes[len - 1] != 0 {
+            return Err(CdrError::BadString);
+        }
+        core::str::from_utf8(&bytes[..len - 1]).map_err(|_| CdrError::BadUtf8)
+    }
+
+    /// Read a sequence length prefix (`uint32` element count), validated
+    /// against the bytes actually left in the buffer.
+    pub fn read_seq_len(&mut self) -> Result<usize, CdrError> {
+        let n = self.read_u32()? as usize;
+        if n > self.buf.len() - self.pos {
+            return Err(CdrError::Truncated);
+        }
+        Ok(n)
+    }
+}

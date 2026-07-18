@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use roscmp_dds::discovery::DiscoveryInfo;
 use roscmp_dds::graph::{ActionChannel, Graph};
-use roscmp_dds::transport::Dds;
+use roscmp_dds::msgs::std_msgs__String;
+use roscmp_dds::transport::{Dds, Qos, Transport};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -52,12 +53,22 @@ fn main() {
     }
 }
 
-/// Announce `name` on `ros_discovery_info` (latched) so it shows in
-/// `ros2 node list`, then idle to keep the participant alive.
+/// Announce `name` on `ros_discovery_info` (latched) with a `/chatter`
+/// publisher and a `/commands` subscriber, then idle to keep the participant
+/// (and its endpoints) alive. Registering each endpoint's real DDS GID lets
+/// `ros2 node info /name` list the publisher/subscriber and their types.
 fn advertise_node(name: &str) {
     let dds = Dds::new(0);
+    // Real endpoints: their GUIDs are advertised via SEDP, and the GIDs we push
+    // below let `ros2 node info` cross-reference them back to this node.
+    let publisher = dds.publisher::<std_msgs__String>("/chatter", Qos::Default);
+    let subscriber = dds.subscriber::<std_msgs__String>("/commands", Qos::Default);
+
     let mut discovery = DiscoveryInfo::new(&dds);
     discovery.add_node("/", name);
-    println!("advertising node /{name} on ros_discovery_info");
+    discovery.add_writer_gid("/", name, publisher.gid());
+    discovery.add_reader_gid("/", name, subscriber.gid());
+    println!("advertising node /{name} (pub /chatter, sub /commands) on ros_discovery_info");
     std::thread::sleep(Duration::from_secs(30));
+    drop((publisher, subscriber));
 }

@@ -11,10 +11,12 @@
 //! keep-last(1) QoS (our [`Qos::Latched`] preset), so late-joining tools still
 //! receive the current node set.
 //!
-//! Limitation: we leave each node's `reader_gid_seq`/`writer_gid_seq` empty.
-//! RustDDS does not expose our own endpoints' GIDs cleanly, and an empty entity
-//! list still makes the node appear in `ros2 node list` — it only means the
-//! per-node topic/endpoint wiring is not advertised through this channel.
+//! Endpoint wiring: a node's publishers/subscribers are advertised by pushing
+//! each endpoint's 16-byte GID into the node's `writer_gid_seq`/`reader_gid_seq`
+//! (see [`DiscoveryInfo::add_writer_gid`]/[`DiscoveryInfo::add_reader_gid`]).
+//! `ros2 node info` cross-references those GIDs against DDS endpoint discovery
+//! (SEDP) to list each endpoint's topic and type, so the GIDs registered here
+//! must be the real DDS GUIDs of endpoints we actually create.
 #![deny(unsafe_code)]
 
 use rustdds::{
@@ -39,8 +41,8 @@ pub struct Gid {
     pub data: [u8; 16],
 }
 
-/// `rmw_dds_common/msg/NodeEntitiesInfo`: one node's identity (and, in a full
-/// implementation, its reader/writer GIDs — left empty here, see module docs).
+/// `rmw_dds_common/msg/NodeEntitiesInfo`: one node's identity plus the GIDs of
+/// its subscriber (`reader_gid_seq`) and publisher (`writer_gid_seq`) endpoints.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NodeEntitiesInfo {
     pub node_namespace: String,
@@ -139,6 +141,33 @@ impl CdrMsg for ParticipantEntitiesInfo {
         unsafe { g.fini() };
         Ok(out)
     }
+}
+
+/// Push `gid` onto the matching node's reader or writer sequence, returning
+/// whether anything changed (node found and GID not already present).
+fn push_gid(
+    nodes: &mut [NodeEntitiesInfo],
+    namespace: &str,
+    name: &str,
+    gid: [u8; 16],
+    reader: bool,
+) -> bool {
+    let Some(node) = nodes
+        .iter_mut()
+        .find(|n| n.node_namespace == namespace && n.node_name == name)
+    else {
+        return false;
+    };
+    let seq = if reader {
+        &mut node.reader_gid_seq
+    } else {
+        &mut node.writer_gid_seq
+    };
+    if seq.iter().any(|g| g.data == gid) {
+        return false;
+    }
+    seq.push(Gid { data: gid });
+    true
 }
 
 /// A discovered ROS node: its namespace and name.
@@ -256,6 +285,24 @@ impl DiscoveryInfo {
         }
     }
 
+    /// Advertise a publisher endpoint under `namespace`/`name` by its 16-byte
+    /// GID (from [`crate::transport::DdsPub::gid`]) and republish. No-op if the
+    /// node is unknown or the GID is already listed.
+    pub fn add_writer_gid(&mut self, namespace: &str, name: &str, gid: [u8; 16]) {
+        if push_gid(&mut self.nodes, namespace, name, gid, false) {
+            self.publish();
+        }
+    }
+
+    /// Advertise a subscriber endpoint under `namespace`/`name` by its 16-byte
+    /// GID (from [`crate::transport::DdsSub::gid`]) and republish. No-op if the
+    /// node is unknown or the GID is already listed.
+    pub fn add_reader_gid(&mut self, namespace: &str, name: &str, gid: [u8; 16]) {
+        if push_gid(&mut self.nodes, namespace, name, gid, true) {
+            self.publish();
+        }
+    }
+
     fn publish(&self) {
         let _ = self.writer.write(self.snapshot(), None);
     }
@@ -342,6 +389,45 @@ mod tests {
         };
         let back = ParticipantEntitiesInfo::decode(&info.encode()).unwrap();
         assert_eq!(back, info);
+    }
+
+    #[test]
+    fn push_gid_appends_to_matching_node_and_dedups() {
+        let mut nodes = vec![NodeEntitiesInfo {
+            node_namespace: "/".into(),
+            node_name: "talker".into(),
+            ..NodeEntitiesInfo::default()
+        }];
+        assert!(super::push_gid(
+            &mut nodes,
+            "/",
+            "talker",
+            gid(5).data,
+            false
+        ));
+        assert!(!super::push_gid(
+            &mut nodes,
+            "/",
+            "talker",
+            gid(5).data,
+            false
+        )); // dedup
+        assert!(super::push_gid(
+            &mut nodes,
+            "/",
+            "talker",
+            gid(6).data,
+            true
+        ));
+        assert!(!super::push_gid(
+            &mut nodes,
+            "/",
+            "missing",
+            gid(7).data,
+            true
+        )); // unknown node
+        assert_eq!(nodes[0].writer_gid_seq, vec![gid(5)]);
+        assert_eq!(nodes[0].reader_gid_seq, vec![gid(6)]);
     }
 
     #[test]

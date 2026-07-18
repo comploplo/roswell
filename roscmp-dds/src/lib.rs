@@ -2,6 +2,8 @@
 //! keeping our CDR serializer as the single source of truth.
 
 pub mod action;
+#[cfg(feature = "tokio")]
+pub mod async_rt;
 pub mod codec;
 pub mod diagnostics;
 pub mod discovery;

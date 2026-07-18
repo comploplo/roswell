@@ -161,6 +161,24 @@ int rcm_type_load_srv(const char *srv_path, const char *const *deps, size_t n_de
                       RcmHandle *out_req, RcmHandle *out_resp);
 
 /*
+ * Resolve a message type by REFERENCE (`pkg/msg/Name`) against workspace search
+ * `roots`, discovering nested cross-package dependencies. Each root may be a
+ * plain package tree (`<root>/<pkg>/msg/<Name>.msg`, e.g. a colcon `src/`
+ * checkout) or an ament install prefix (`<root>/share/<pkg>/msg/<Name>.msg`, as
+ * in AMENT_PREFIX_PATH); both layouts are probed. `roots`/`n_roots` may be
+ * NULL/0. Parsing and dependency resolution happen in Rust. Returns 0 on failure.
+ */
+RcmHandle rcm_type_resolve(const char *reference, const char *const *roots, size_t n_roots);
+
+/*
+ * Resolve a service type by reference (`pkg/srv/Name`) against `roots` into its
+ * request and response types (*out_req / *out_resp). Returns 0 on success,
+ * negative on failure.
+ */
+int rcm_type_resolve_srv(const char *reference, const char *const *roots, size_t n_roots,
+                         RcmHandle *out_req, RcmHandle *out_resp);
+
+/*
  * JSON describing the whole dependency closure's C-ABI layout. Owned string
  * (free with rcm_string_free). Shape:
  *
@@ -320,6 +338,129 @@ int rcm_call(RcmHandle client, RcmHandle req, RcmHandle resp_out, int timeout_ms
 
 /* Free a client handle. 0 on success, negative if already stale. */
 int rcm_client_free(RcmHandle client);
+
+/* ---- actions ------------------------------------------------------------ */
+
+/*
+ * Create a runtime-typed action client for `action_name` (e.g. "/fibonacci"),
+ * resolving the action's wire types from its `reference` (`pkg/action/Name`)
+ * against workspace search `roots` (see rcm_type_resolve). Internally binds the
+ * three action services (send_goal / get_result / cancel_goal) and subscribes to
+ * the feedback topic; the status topic is not subscribed (get_result already
+ * returns the final status). Returns 0 on error. Free with rcm_action_client_free.
+ */
+RcmHandle rcm_action_client(RcmHandle ctx, const char *action_name, const char *reference,
+                            const char *const *roots, size_t n_roots);
+
+/*
+ * Resolve an action reference (`pkg/action/Name`) against `roots` into its eight
+ * component types, written to out[0..8] in order: goal, result, feedback,
+ * send_goal_request, send_goal_response, get_result_request, get_result_response,
+ * feedback_message. Each is an owned type handle (free with rcm_type_free). Use
+ * this to build an action SERVER from the plain service/topic primitives; a
+ * client should use rcm_action_client. Returns 0 on success, negative on failure.
+ */
+int rcm_action_load(const char *reference, const char *const *roots, size_t n_roots,
+                    RcmHandle *out);
+
+/*
+ * The goal / result / feedback PAYLOAD types, as owned type handles (free with
+ * rcm_type_free). Use them to allocate the messages passed to / filled by
+ * send_goal / get_result / poll_feedback. 0 on error.
+ */
+RcmHandle rcm_action_goal_type(RcmHandle client);
+RcmHandle rcm_action_result_type(RcmHandle client);
+RcmHandle rcm_action_feedback_type(RcmHandle client);
+
+/*
+ * 1 once all three action services have discovered the server end to end, 0 if
+ * not yet, negative on error. Poll before the first send_goal.
+ */
+int rcm_action_server_ready(RcmHandle client);
+
+/*
+ * Send goal message `goal` (of the action's goal type) under a freshly generated
+ * goal id, blocking up to `timeout_ms` for the accept/reject reply. Writes the
+ * 16-byte goal id to out_goal_id and 1/0 accepted to *out_accepted. Returns 1 on
+ * reply, 0 on timeout, negative on error (RCM_ERR_TYPE_MISMATCH if `goal` is not
+ * of the action's goal type).
+ */
+int rcm_action_send_goal(RcmHandle client, RcmHandle goal, int timeout_ms,
+                         uint8_t *out_goal_id, uint8_t *out_accepted);
+
+/*
+ * Request the result for `goal_id` (16 bytes), blocking up to `timeout_ms`,
+ * decoding the result payload into message `result` (of the action's result
+ * type) and writing the final goal status to *out_status (an action_msgs
+ * GoalStatus value). Returns 1 on reply, 0 on timeout, negative on error.
+ */
+int rcm_action_get_result(RcmHandle client, const uint8_t *goal_id, RcmHandle result,
+                          int timeout_ms, int8_t *out_status);
+
+/*
+ * Take the next feedback sample (non-blocking), decoding the feedback payload
+ * into message `feedback` (of the action's feedback type) and writing its 16-byte
+ * goal id to out_goal_id (may be NULL). Returns 1 if a sample was decoded, 0 if
+ * none available, negative on error.
+ */
+int rcm_action_poll_feedback(RcmHandle client, RcmHandle feedback, uint8_t *out_goal_id);
+
+/*
+ * Request cancellation of `goal_id` (16 bytes; all-zero cancels every goal),
+ * blocking up to `timeout_ms`, writing the server's return_code to
+ * *out_return_code. Returns 1 on reply, 0 on timeout, negative on error.
+ */
+int rcm_action_cancel_goal(RcmHandle client, const uint8_t *goal_id, int timeout_ms,
+                           int8_t *out_return_code);
+
+/* Free an action-client handle. 0 on success, negative if already stale. */
+int rcm_action_client_free(RcmHandle client);
+
+/* ---- parameters --------------------------------------------------------- */
+
+/*
+ * A scalar parameter value. `kind` is a ParameterType tag: 1 = bool, 2 = integer,
+ * 3 = double, 4 = string. `boolean`/`integer`/`number` carry the value for their
+ * kind; `text` is the NUL-terminated string for kind 4 (null otherwise). Array
+ * parameter kinds are not exposed through this struct.
+ */
+typedef struct RcmParamValue {
+  uint8_t kind;
+  uint8_t boolean;
+  int64_t integer;
+  double number;
+  const char *text;
+} RcmParamValue;
+
+/*
+ * Create a parameter server for node `name` on `ctx`. A background thread
+ * answers get/set/list/describe requests (so `ros2 param ...` works) and
+ * publishes `/parameter_events`. Returns 0 on error. Free with
+ * rcm_param_server_free (which also stops the thread).
+ */
+RcmHandle rcm_param_server(RcmHandle ctx, const char *name);
+
+/*
+ * Declare or overwrite parameter `name` with `value`, publishing a
+ * `/parameter_events` update. 0 on success, negative on error.
+ */
+int rcm_param_set(RcmHandle server, const char *name, const RcmParamValue *value);
+
+/*
+ * The current value of parameter `name` as a JSON object
+ * { "type": "double", "value": 1.5 } (arrays render "value": null). Owned string
+ * (free with rcm_string_free). Null on a handle error or if `name` is undeclared.
+ */
+char *rcm_param_get_json(RcmHandle server, const char *name);
+
+/*
+ * The names of every declared parameter as a JSON array of strings. Owned string
+ * (free with rcm_string_free). Null on a handle error.
+ */
+char *rcm_param_list_json(RcmHandle server);
+
+/* Stop the server's background thread and free its handle. 0 on success. */
+int rcm_param_server_free(RcmHandle server);
 
 /* ---- graph & node identity ---------------------------------------------- */
 

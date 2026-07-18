@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use rustdds::{
     no_key::{DataReader, DataWriter},
     rpc::SampleIdentity,
-    TopicKind, WriteOptionsBuilder,
+    StatusEvented, TopicKind, WriteOptionsBuilder,
 };
 
 use crate::codec::{service_topics, CdrMsg, De, Ser};
@@ -76,6 +76,8 @@ impl<Req: CdrMsg, Resp: CdrMsg> Service<Req, Resp> {
 pub struct Client<Req: CdrMsg, Resp: CdrMsg> {
     reader: DataReader<Resp, De<Resp>>,
     writer: DataWriter<Req, Ser<Req>>,
+    req_matched: i32,
+    resp_matched: i32,
 }
 
 impl<Req: CdrMsg, Resp: CdrMsg> Client<Req, Resp> {
@@ -101,7 +103,30 @@ impl<Req: CdrMsg, Resp: CdrMsg> Client<Req, Resp> {
             .expect("subscriber")
             .create_datareader_no_key(&reply_topic, None)
             .expect("reply reader");
-        Client { reader, writer }
+        Client {
+            reader,
+            writer,
+            req_matched: 0,
+            resp_matched: 0,
+        }
+    }
+
+    /// True once the request writer and reply reader have each matched a peer,
+    /// i.e. a server is discovered end to end. Poll this before the first
+    /// `call`: a request written while discovery is still in flight is silently
+    /// dropped by the volatile writer.
+    pub fn server_is_ready(&mut self) -> bool {
+        while let Some(status) = self.writer.try_recv_status() {
+            if let rustdds::DataWriterStatus::PublicationMatched { current, .. } = status {
+                self.req_matched = current.count();
+            }
+        }
+        while let Some(status) = self.reader.try_recv_status() {
+            if let rustdds::DataReaderStatus::SubscriptionMatched { current, .. } = status {
+                self.resp_matched = current.count();
+            }
+        }
+        self.req_matched > 0 && self.resp_matched > 0
     }
 
     /// Send `req` and block up to `timeout` for the reply correlated to it.

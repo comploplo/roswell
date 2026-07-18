@@ -2,6 +2,7 @@
 //!
 //! Usage:
 //!   roscmp [--lang rust|c|python|all] [--out DIR] FILE.msg [FILE.msg ...]
+//!   roscmp --lang rust --no-std [--string-cap N] [--seq-cap N] FILE.msg ...
 //!
 //! Package/name are inferred from the path using the ROS layout
 //! `<package>/msg/<Name>.msg`; if there is no `msg` directory, the parent
@@ -32,6 +33,7 @@ struct Options {
     lang: String,
     out: Option<PathBuf>,
     dds: bool,
+    nostd: Option<codegen::rust_nostd::Caps>,
     files: Vec<PathBuf>,
 }
 
@@ -70,12 +72,21 @@ fn run(args: &[String]) -> Result<(), String> {
     };
 
     for lang in targets {
-        let (code, filename) = match lang {
-            "rust" if opts.dds => (codegen::rust::generate_dds(&program), "roscmp_msgs.rs"),
-            "rust" => (codegen::rust::generate(&program), "roscmp_msgs.rs"),
-            "c" => (codegen::c::generate(&program), "roscmp_msgs.h"),
-            "python" => (codegen::python::generate(&program), "roscmp_msgs.py"),
-            other => return Err(format!("unknown language `{other}`")),
+        let (code, filename) = match (lang, opts.nostd) {
+            ("rust", Some(caps)) => (
+                codegen::rust_nostd::generate(&program, caps),
+                "roscmp_msgs_nostd.rs",
+            ),
+            (other, Some(_)) => {
+                return Err(format!(
+                    "--no-std supports only `--lang rust`, not `{other}`"
+                ));
+            }
+            ("rust", None) if opts.dds => (codegen::rust::generate_dds(&program), "roscmp_msgs.rs"),
+            ("rust", None) => (codegen::rust::generate(&program), "roscmp_msgs.rs"),
+            ("c", None) => (codegen::c::generate(&program), "roscmp_msgs.h"),
+            ("python", None) => (codegen::python::generate(&program), "roscmp_msgs.py"),
+            (other, None) => return Err(format!("unknown language `{other}`")),
         };
         match &opts.out {
             Some(dir) => {
@@ -94,6 +105,8 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
     let mut lang = "all".to_string();
     let mut out = None;
     let mut dds = false;
+    let mut nostd = false;
+    let mut caps = codegen::rust_nostd::Caps::default();
     let mut files = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -108,6 +121,17 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
             }
             // Rust backend only: also emit `crate::codec::CdrMsg` impls for roscmp-dds.
             "--dds" => dds = true,
+            // Rust backend only: heapless (core-only) profile. Declared bounds
+            // (`string<=N`, `T[<=N]`) always win; these set the unbounded defaults.
+            "--no-std" => nostd = true,
+            "--string-cap" => {
+                i += 1;
+                caps.string = parse_cap(args.get(i), "--string-cap")?;
+            }
+            "--seq-cap" => {
+                i += 1;
+                caps.seq = parse_cap(args.get(i), "--seq-cap")?;
+            }
             other if other.starts_with("--") => return Err(format!("unknown flag `{other}`")),
             other => files.push(PathBuf::from(other)),
         }
@@ -117,8 +141,20 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
         lang,
         out,
         dds,
+        nostd: nostd.then_some(caps),
         files,
     })
+}
+
+fn parse_cap(arg: Option<&String>, flag: &str) -> Result<usize, String> {
+    let v: usize = arg
+        .ok_or(format!("{flag} requires a value"))?
+        .parse()
+        .map_err(|_| format!("{flag} requires an integer"))?;
+    if v == 0 {
+        return Err(format!("{flag} must be nonzero"));
+    }
+    Ok(v)
 }
 
 /// Infer `(package, Name)` from a `.msg` path.

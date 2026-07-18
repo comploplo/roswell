@@ -10,12 +10,27 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT OR Apache-2.0" }
 authors = [{ name = "roscmp" }]
-keywords = ["ros2", "dds", "rtps", "robotics"]
+keywords = ["ros2", "dds", "rtps", "robotics", "rmw", "rclpy"]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
     "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Networking",
+    "Typing :: Typed",
 ]
 
 # Pure-Python + stdlib ctypes. numpy is optional (enables zero-copy array views).
@@ -24,6 +39,14 @@ dependencies = []
 [project.optional-dependencies]
 numpy = ["numpy>=1.21"]
 test = ["numpy>=1.21", "pytest>=7"]
+
+# NOTE: placeholder URLs — no public repository is configured yet. Update these
+# to the real project home before publishing to PyPI.
+[project.urls]
+Homepage = "https://github.com/roscmp/roscmp"
+Repository = "https://github.com/roscmp/roscmp"
+Documentation = "https://github.com/roscmp/roscmp/tree/main/python#readme"
+Issues = "https://github.com/roscmp/roscmp/issues"
 
 # Single-source the version from the crate (roscmp-c/Cargo.toml).
 [tool.hatch.version]

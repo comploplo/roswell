@@ -1,0 +1,29 @@
+# Standalone workspace (NOT part of the root roscmp workspace, like `fuzz/`):
+# the firmware cross-compiles to thumbv6m and the harness runs on the host, so
+# it stays out of the stable `--workspace` gate. The host harness package lives
+# here; the firmware is the `fw` member.
+[workspace]
+members = ["fw"]
+resolver = "2"
+
+[package]
+name = "roscmp-hil"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Host-side Renode HIL harness driving the roscmp tunnel firmware"
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+hilt = { path = "../../../hardware/hilt" }
+roscmp-tunnel-core = { path = "../roscmp-tunnel-core" }
+roscmp-dds = { path = "../roscmp-dds" }
+
+# Firmware profile (must live at the workspace root, not in the member crate).
+[profile.release]
+opt-level = "s"
+lto = true
+debug = true

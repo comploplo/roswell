@@ -16,6 +16,12 @@ use roscmp_dds::tunnel::{
 };
 use serialport::SerialPort;
 
+#[path = "shared/argcursor.rs"]
+mod argcursor;
+use argcursor::ArgCursor;
+
+const USAGE: &str = "usage: usb_topic_bridge PORT [--baud N] [--domain N] [--reconnect-ms N] [--tx /topic:pkg/msg/Type] [--rx /topic:pkg/msg/Type]";
+
 fn main() -> io::Result<()> {
     let args = Args::parse()?;
     loop {
@@ -151,61 +157,28 @@ struct Args {
 
 impl Args {
     fn parse() -> io::Result<Self> {
-        let mut iter = std::env::args().skip(1);
-        let Some(path) = iter.next() else {
-            return Err(usage());
-        };
+        let mut c = ArgCursor::new(USAGE);
         let mut args = Self {
-            path,
+            path: c.value()?,
             baud: 115_200,
             domain: 0,
             reconnect_delay: Duration::from_secs(1),
             tx: Vec::new(),
             rx: Vec::new(),
         };
-        while let Some(arg) = iter.next() {
+        while let Some(arg) = c.next_arg() {
             match arg.as_str() {
-                "--baud" => {
-                    args.baud = iter
-                        .next()
-                        .ok_or_else(usage)?
-                        .parse()
-                        .map_err(|_| usage())?;
-                }
-                "--domain" => {
-                    args.domain = iter
-                        .next()
-                        .ok_or_else(usage)?
-                        .parse()
-                        .map_err(|_| usage())?;
-                }
-                "--reconnect-ms" => {
-                    let millis = iter
-                        .next()
-                        .ok_or_else(usage)?
-                        .parse()
-                        .map_err(|_| usage())?;
-                    args.reconnect_delay = Duration::from_millis(millis);
-                }
-                "--tx" => args
-                    .tx
-                    .push(TopicRoute::parse(&iter.next().ok_or_else(usage)?)?),
-                "--rx" => args
-                    .rx
-                    .push(TopicRoute::parse(&iter.next().ok_or_else(usage)?)?),
-                _ => return Err(usage()),
+                "--baud" => args.baud = c.parse()?,
+                "--domain" => args.domain = c.parse()?,
+                "--reconnect-ms" => args.reconnect_delay = Duration::from_millis(c.parse()?),
+                "--tx" => args.tx.push(TopicRoute::parse(&c.value()?)?),
+                "--rx" => args.rx.push(TopicRoute::parse(&c.value()?)?),
+                _ => return Err(c.usage()),
             }
         }
         if args.tx.is_empty() && args.rx.is_empty() {
-            return Err(usage());
+            return Err(c.usage());
         }
         Ok(args)
     }
-}
-
-fn usage() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidInput,
-        "usage: usb_topic_bridge PORT [--baud N] [--domain N] [--reconnect-ms N] [--tx /topic:pkg/msg/Type] [--rx /topic:pkg/msg/Type]",
-    )
 }
