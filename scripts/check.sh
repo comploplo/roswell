@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Full local quality gate — same checks CI and pre-commit run.
+# Full local quality gate.
 # Usage: ./scripts/check.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -15,5 +15,8 @@ cargo deny check
 
 echo "==> tests"
 cargo test --workspace
+
+echo "==> python tests"
+uv run --project python --extra test pytest python/tests -q
 
 echo "All checks passed."

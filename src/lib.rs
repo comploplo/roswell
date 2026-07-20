@@ -1,4 +1,4 @@
-//! `roscmp` — a from-scratch compiler for ROS message definitions.
+//! `roswell` — a from-scratch compiler for ROS message definitions.
 //!
 //! Milestone 1: parse ROS2 `.msg` files into an AST and generate FFI-compatible
 //! type bindings (Rust / C / Python) that share one memory layout.

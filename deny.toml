@@ -33,7 +33,7 @@ ignore = true
 
 # Verification-only Creusot tooling (LGPL-2.1). Pulled in solely by the opt-in
 # `verify` feature — never compiled or linked into shipped artifacts — so its
-# copyleft terms do not reach roscmp's distribution. Scoped per-crate so the
+# copyleft terms do not reach roswell's distribution. Scoped per-crate so the
 # LGPL allowance does not widen to the rest of the tree.
 [[licenses.exceptions]]
 crate = "creusot-std"
@@ -51,5 +51,5 @@ wildcards = "deny"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# creusot-std (verify feature only) is unpublished; pinned by rev in roscmp-verify.
+# creusot-std (verify feature only) is unpublished; pinned by rev in roswell-verify.
 allow-git = ["https://github.com/creusot-rs/creusot"]

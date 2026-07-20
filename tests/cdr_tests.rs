@@ -7,9 +7,9 @@
 
 use std::process::Command;
 
-use roscmp::codegen;
-use roscmp::ir::MsgId;
-use roscmp::{parse_message, resolve};
+use roswell::codegen;
+use roswell::ir::MsgId;
+use roswell::{parse_message, resolve};
 
 /// Generate bindings for `defs`, append `main_body`, compile, run, return stdout.
 fn run_generated(defs: &[(&str, &str, &str)], main_body: &str, tag: &str) -> String {
@@ -23,7 +23,7 @@ fn run_generated(defs: &[(&str, &str, &str)], main_body: &str, tag: &str) -> Str
     code.push_str(main_body);
     code.push_str("\n}\n");
 
-    let dir = std::env::temp_dir().join(format!("roscmp_cdr_{tag}"));
+    let dir = std::env::temp_dir().join(format!("roswell_cdr_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let src = dir.join("gen.rs");

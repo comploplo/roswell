@@ -1,11 +1,11 @@
-# cargo-fuzz targets for roscmp's wire/file-facing parsers and the unsafe
+# cargo-fuzz targets for roswell's wire/file-facing parsers and the unsafe
 # runtime codec. This crate is DELIBERATELY DETACHED from the main workspace
 # (own `[workspace]` table below, and excluded in the root Cargo.toml) so that
 # `scripts/check.sh` — which runs `cargo {clippy,test} --workspace` on stable —
 # never tries to build these libfuzzer targets (they need nightly + a sanitizer
 # runtime). Build/run them only via `cargo +nightly fuzz run <target>`.
 [package]
-name = "roscmp-fuzz"
+name = "roswell-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -19,11 +19,11 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 
-[dependencies.roscmp]
+[dependencies.roswell]
 path = ".."
 
-[dependencies.roscmp-dds]
-path = "../roscmp-dds"
+[dependencies.roswell-ros2-compat]
+path = "../roswell-ros2-compat"
 
 # Keep line-number symbols for crash triage without full debug bloat.
 [profile.release]

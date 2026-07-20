@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- FastDDS default participant profile forcing UDPv4 only (no shared memory).
+     Used by scripts/bench-cross-host.sh as a cross-check: if rclpy's cross-host
+     numbers match with and without this profile, shared memory was already out
+     of play (the two-container namespace split removed it), which is the point.
+     Selected via FASTRTPS_DEFAULT_PROFILES_FILE + is_default_profile. -->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <profiles>
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>udp_only_transport</transport_id>
+        <type>UDPv4</type>
+      </transport_descriptor>
+    </transport_descriptors>
+    <participant profile_name="udp_only_participant" is_default_profile="true">
+      <rtps>
+        <userTransports>
+          <transport_id>udp_only_transport</transport_id>
+        </userTransports>
+        <useBuiltinTransports>false</useBuiltinTransports>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>

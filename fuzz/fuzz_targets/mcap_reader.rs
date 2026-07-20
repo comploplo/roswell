@@ -1,5 +1,5 @@
 #![no_main]
-//! Fuzz the MCAP bag readers (`roscmp_dds::raw`) — the file-facing record
+//! Fuzz the MCAP bag readers (`roswell_ros2_compat::raw`) — the file-facing record
 //! parser plus the zstd/lz4 chunk-decompression paths.
 //!
 //! Both the streaming `RawSampleReader` (drained fully) and the eager
@@ -8,7 +8,7 @@
 
 use libfuzzer_sys::fuzz_target;
 
-use roscmp_dds::raw::{McapLog, RawSampleReader};
+use roswell_ros2_compat::raw::{McapLog, RawSampleReader};
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(reader) = RawSampleReader::from_bytes(data.to_vec()) {

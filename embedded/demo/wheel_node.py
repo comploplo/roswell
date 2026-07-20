@@ -1,9 +1,9 @@
-"""Embedded Python ROS node — the existing `roscmp` FFI wheel (pure ctypes over
-the roscmp Rust runtime), the Raspberry-Pi-class node in the demo.
+"""Embedded Python ROS node — the existing `roswell` FFI wheel (pure ctypes over
+the roswell Rust runtime), the Raspberry-Pi-class node in the demo.
 
 No new protocol code: this is the shipped client. It publishes a
 `geometry_msgs/msg/Twist` on `/cmd_vel` over real RTPS/DDS. The demo harness
-subscribes to that topic (also via the roscmp runtime), bridges each sample to
+subscribes to that topic (also via the roswell runtime), bridges each sample to
 the embedded Rust firmware over the tunnel/UART, and asserts the firmware's ack.
 
 Usage:  python wheel_node.py [duration_seconds] [rate_hz]
@@ -12,14 +12,14 @@ Usage:  python wheel_node.py [duration_seconds] [rate_hz]
 import asyncio
 import sys
 
-import roscmp
+import roswell
 
 DURATION = float(sys.argv[1]) if len(sys.argv) > 1 else 90.0
 RATE_HZ = float(sys.argv[2]) if len(sys.argv) > 2 else 10.0
 
 
 async def main():
-    node = roscmp.Node("wheel_cmd_vel_node", domain=0)
+    node = roswell.Node("wheel_cmd_vel_node", domain=0)
     Twist = node.load_type("geometry_msgs/msg/Twist")  # bundled — no ROS install
     pub = node.publisher("/cmd_vel", Twist)
     print("wheel_node: publishing geometry_msgs/msg/Twist on /cmd_vel", flush=True)

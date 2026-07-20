@@ -5,12 +5,12 @@ import time
 
 import pytest
 
-import roscmp
+import roswell
 
 
 @pytest.fixture
 def node():
-    n = roscmp.Node("tf_node", domain=0)
+    n = roswell.Node("tf_node", domain=0)
     try:
         yield n
     finally:
@@ -22,8 +22,8 @@ IDENTITY_Q = (0.0, 0.0, 0.0, 1.0)
 
 def test_lookup_resolves_static_plus_dynamic_chain(node):
     tf = node.tf_buffer()
-    static_t = roscmp.Transform(translation=(1.0, 2.0, 0.0), rotation=IDENTITY_Q)
-    dynamic_t = roscmp.Transform(translation=(3.0, 0.0, 0.0), rotation=IDENTITY_Q)
+    static_t = roswell.Transform(translation=(1.0, 2.0, 0.0), rotation=IDENTITY_Q)
+    dynamic_t = roswell.Transform(translation=(3.0, 0.0, 0.0), rotation=IDENTITY_Q)
 
     # Republish until DDS discovery lets the loopback samples land.
     deadline = time.monotonic() + 15.0
@@ -49,6 +49,6 @@ def test_lookup_resolves_static_plus_dynamic_chain(node):
 def test_lookup_missing_frame_raises(node):
     tf = node.tf_buffer()
     assert not tf.can_transform("map", "nowhere")
-    with pytest.raises(roscmp.RoscmpError):
+    with pytest.raises(roswell.RoswellError):
         tf.lookup_transform("map", "nowhere")
     tf.close()

@@ -1,9 +1,9 @@
 //! The killer demo, as a HIL test: the embedded **Python** node (the shipped
-//! `roscmp` FFI wheel — pure ctypes over the Rust runtime) publishes a ROS topic
+//! `roswell` FFI wheel — pure ctypes over the Rust runtime) publishes a ROS topic
 //! over real RTPS/DDS, and the embedded **Rust** firmware (no_std, on simulated
 //! Cortex-M silicon in Renode) receives it over the tunnel/UART and acks it.
 //!
-//! Chain: `wheel_node.py` --DDS--> this harness (roscmp-dds subscriber, the same
+//! Chain: `wheel_node.py` --DDS--> this harness (roswell-ros2-compat subscriber, the same
 //! runtime the `tcp_topic_bridge`/`usb_topic_bridge` bins use) --tunnel/UART-->
 //! Renode firmware --Ack--> harness. No new Python protocol code; no parallel
 //! codec. The harness plays the DDS<->UART bridge in-process specifically so it
@@ -12,7 +12,7 @@
 //!
 //! `#[ignore]`d (needs the Renode image + the built wheel in `python/.venv-test`;
 //! ~1 min). Run:
-//!   cargo test -p roscmp-hil --test wheel_firmware_demo -- --ignored --nocapture
+//!   cargo test -p roswell-hil --test wheel_firmware_demo -- --ignored --nocapture
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -22,9 +22,9 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use hilt::{HilConfig, MachineSpec, Platform, ReplSource};
-use roscmp_dds::raw::{raw_qos_for_topic, RawDdsSubscriber};
-use roscmp_dds::transport::Dds;
-use roscmp_tunnel_core as wire;
+use roswell_ros2_compat::raw::{raw_qos_for_topic, RawDdsSubscriber};
+use roswell_ros2_compat::transport::Dds;
+use roswell_tunnel_core as wire;
 
 const UART_PORT: u16 = 13458;
 
@@ -41,7 +41,7 @@ fn build_uart_firmware() -> PathBuf {
         .args([
             "build",
             "-p",
-            "roscmp-hil-fw",
+            "roswell-hil-fw",
             "--target",
             "thumbv6m-none-eabi",
             "--release",
@@ -98,7 +98,7 @@ fn bridge_once(
 
     // Direction: firmware -> host. Our Hello draws the firmware's Hello reply.
     let mut buf = [0u8; 512];
-    let n = wire::encode_hello(&mut buf, "roscmp-demo-bridge").ok()?;
+    let n = wire::encode_hello(&mut buf, "roswell-demo-bridge").ok()?;
     stream.write_all(&buf[..n]).ok()?;
     stream.flush().ok()?;
     let hello = read_frame(&mut stream).ok()?;
@@ -130,7 +130,7 @@ fn bridge_once(
 }
 
 #[test]
-#[ignore = "requires the Renode image (auto-built on arm64) + the roscmp wheel in python/.venv-test; slow (~1 min)"]
+#[ignore = "requires the Renode image (auto-built on arm64) + the roswell wheel in python/.venv-test; slow (~1 min)"]
 fn wheel_node_message_reaches_cortex_m_firmware_over_dds() {
     let elf = build_uart_firmware();
 
@@ -150,7 +150,7 @@ fn wheel_node_message_reaches_cortex_m_firmware_over_dds() {
     // Embedded Python node: the shipped wheel, publishing /cmd_vel over real DDS.
     let mut wheel = spawn_wheel_node();
 
-    // Bridge role via the roscmp runtime: subscribe /cmd_vel, forward to the MCU.
+    // Bridge role via the roswell runtime: subscribe /cmd_vel, forward to the MCU.
     let dds = Dds::new(0);
     let mut sub = RawDdsSubscriber::new(
         dds.participant(),
@@ -179,7 +179,7 @@ fn wheel_node_message_reaches_cortex_m_firmware_over_dds() {
     let _ = wheel.wait();
 
     let (peer, seq) = result.expect("wheel message never reached the firmware within budget");
-    assert_eq!(peer, "roscmp-mcu", "unexpected firmware peer name");
+    assert_eq!(peer, "roswell-mcu", "unexpected firmware peer name");
     assert_eq!(seq, 1);
     println!(
         "DEMO OK: embedded Python wheel node -> real DDS -> tunnel/UART -> \

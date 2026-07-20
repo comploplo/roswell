@@ -3,12 +3,12 @@ Rust — the hand-rolled JSON emitter renders them on the way back out)."""
 
 import pytest
 
-import roscmp
+import roswell
 
 
 @pytest.fixture
 def node():
-    n = roscmp.Node("param_array_node", domain=0)
+    n = roswell.Node("param_array_node", domain=0)
     try:
         yield n
     finally:
@@ -42,7 +42,7 @@ def test_bad_arrays_raise(node):
 
 
 def test_node_context_manager():
-    with roscmp.Node("ctx_node", domain=0) as n:
+    with roswell.Node("ctx_node", domain=0) as n:
         n.set_parameter("x", 1)
         assert n.get_parameter("x") == 1
     assert repr(n).endswith("closed>")

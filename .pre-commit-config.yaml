@@ -1,4 +1,4 @@
-# Run `pre-commit install` after `git init` to enable.
+# Run `pre-commit install` to enable.
 # Manual run: `pre-commit run --all-files`
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -37,6 +37,21 @@ repos:
         language: system
         files: '(Cargo\.(toml|lock)|deny\.toml)$'
         pass_filenames: false
+      # Mirror CI's two jobs so failures surface before push, not in CI.
+      # On pre-push only: too slow for every commit.
+      - id: cargo-test
+        name: cargo test --workspace
+        entry: cargo test --workspace
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+      - id: pytest
+        name: pytest (python)
+        entry: uv run --project python --extra test python -m pytest python/tests -q
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+
       - id: cargo-update
         name: cargo update (refresh deps)
         entry: cargo update

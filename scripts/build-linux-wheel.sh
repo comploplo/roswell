@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Build a manylinux Python wheel for roscmp inside a container.
+# Build a manylinux Python wheel for roswell inside a container.
 #
-# roscmp is pure ctypes over a C ABI, so the wheel is py3/none but carries a
-# platform tag for the bundled roscmp_c cdylib. This script builds that cdylib
+# roswell is pure ctypes over a C ABI, so the wheel is py3/none but carries a
+# platform tag for the bundled roswell_c cdylib. This script builds that cdylib
 # against an old glibc (manylinux_2_28) so the resulting wheel installs on any
 # reasonably modern Linux, then confirms the tag with `auditwheel show`.
 #
@@ -14,7 +14,7 @@
 # host works only if podman/qemu emulation is configured — expect a slow build.
 #
 # Requires: podman (a running machine). No Rust/Python needed on the host.
-# Output: python/dist/roscmp-<ver>-py3-none-manylinux_2_28_<arch>.whl
+# Output: python/dist/roswell-<ver>-py3-none-manylinux_2_28_<arch>.whl
 set -euo pipefail
 
 ARCH="${1:-$(uname -m)}"
@@ -40,7 +40,7 @@ echo ">> staging source into ${STAGE}"
 rsync -a \
   --exclude='target' --exclude='.git' --exclude='.venv*' --exclude='fuzz' \
   --exclude='python/dist' --exclude='.why3find' --exclude='.pytest_cache' \
-  --exclude='python/roscmp.egg-info' --exclude='__pycache__' \
+  --exclude='python/roswell.egg-info' --exclude='__pycache__' \
   "$REPO_ROOT/" "$STAGE/"
 
 podman pull -q "$IMAGE" >/dev/null
@@ -54,7 +54,7 @@ podman run --rm -v "$STAGE":/build:rw,Z "$IMAGE" bash -euo pipefail -c '
   rustc --version
   PY=/opt/python/cp311-cp311/bin/python
   "$PY" -m pip install -q --upgrade build >/dev/null
-  echo ">> building wheel (cargo build -p roscmp-c --release + bundle)"
+  echo ">> building wheel (cargo build -p roswell-c --release + bundle)"
   cd /build
   "$PY" -m build --wheel python/
   echo ">> auditwheel show (confirm manylinux tag is legitimate)"

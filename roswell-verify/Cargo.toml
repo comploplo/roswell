@@ -1,0 +1,27 @@
+[package]
+name = "roswell-verify"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Pure, self-contained real-time cores extracted from roswell's hot paths so
+# they can be machine-checked with Creusot (panic-freedom + functional
+# contracts) while remaining THE production implementation the rest of the
+# workspace calls. No external runtime dependencies.
+#
+# `creusot-std` supplies the `requires`/`ensures`/`invariant`/`variant` macros
+# and is pulled in ONLY under the opt-in `verify` feature (which `cargo creusot`
+# enables). Normal builds compile plain Rust with the contracts erased, so this
+# crate adds no always-on dependency to the workspace. See docs/RT.md.
+[dependencies]
+# Pinned to the same revision as the locally installed Creusot toolchain;
+# a git source (not crates.io) because 0.13.0-dev is unpublished — this keeps
+# the workspace resolvable on machines without a local creusot checkout.
+creusot-std = { git = "https://github.com/creusot-rs/creusot", rev = "bef58f6aa7493ac8c8012164a8eeab462c346d1a", optional = true }
+
+[features]
+verify = ["dep:creusot-std"]
+
+[lints]
+workspace = true

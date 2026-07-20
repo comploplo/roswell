@@ -6,9 +6,9 @@
 #
 # Miri interprets Rust with no real OS/network, so RustDDS / loopback / network
 # tests CANNOT run under it. We therefore restrict to the byte-level codec:
-#   - roscmp lib unit tests            → the CDR runtime (src/cdr.rs::tests)
-#   - roscmp dynamic_decode_regression → decode error-path leak-freedom
-#   - roscmp-dds dynamic_byte_equality → the main unsafe-walker exerciser
+#   - roswell lib unit tests            → the CDR runtime (src/cdr.rs::tests)
+#   - roswell dynamic_decode_regression → decode error-path leak-freedom
+#   - roswell-ros2-compat dynamic_byte_equality → the main unsafe-walker exerciser
 #     (encode/decode/fini/dealloc over C-ABI memory, byte-equality vs codegen)
 #
 # `-Zmiri-disable-isolation` lets the one sample-file-loading test in
@@ -18,13 +18,13 @@ cd "$(dirname "$0")/.."
 
 export MIRIFLAGS="${MIRIFLAGS:-} -Zmiri-disable-isolation"
 
-echo "==> miri: roscmp CDR runtime unit tests"
-cargo +nightly miri test -p roscmp --lib
+echo "==> miri: roswell CDR runtime unit tests"
+cargo +nightly miri test -p roswell --lib
 
-echo "==> miri: roscmp decode error-path regressions"
-cargo +nightly miri test -p roscmp --test dynamic_decode_regression
+echo "==> miri: roswell decode error-path regressions"
+cargo +nightly miri test -p roswell --test dynamic_decode_regression
 
-echo "==> miri: roscmp-dds dynamic byte-equality (unsafe walkers)"
-cargo +nightly miri test -p roscmp-dds --test dynamic_byte_equality
+echo "==> miri: roswell-ros2-compat dynamic byte-equality (unsafe walkers)"
+cargo +nightly miri test -p roswell-ros2-compat --test dynamic_byte_equality
 
 echo "Miri: all pure codec tests passed."

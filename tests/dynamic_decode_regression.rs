@@ -5,9 +5,9 @@
 //! Miri (`scripts/miri.sh`) to actually observe the leak-freedom; a plain
 //! `cargo test` run just asserts no panic/UB.
 
-use roscmp::dynamic::DynamicType;
-use roscmp::ir::MsgId;
-use roscmp::{parse_message, resolve};
+use roswell::dynamic::DynamicType;
+use roswell::ir::MsgId;
+use roswell::{parse_message, resolve};
 
 fn dyn_type(sources: &[(&str, &str, &str)]) -> DynamicType {
     let inputs = sources

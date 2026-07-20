@@ -1,13 +1,13 @@
 //! RIHS01 type hashes verified byte-exact against `ros:jazzy` (captured from the
 //! installed type-description JSON / `ros2 topic info -v` on 2026-06-15).
 
-use roscmp::ir::MsgId;
-use roscmp::typehash::{type_description_json, type_hash};
-use roscmp::{
+use roswell::ir::MsgId;
+use roswell::typehash::{type_description_json, type_hash};
+use roswell::{
     action_messages, parse_action, parse_message, parse_service, resolve, service_messages,
 };
 
-fn program(defs: &[(&str, &str, &str)]) -> Vec<roscmp::ir::Message> {
+fn program(defs: &[(&str, &str, &str)]) -> Vec<roswell::ir::Message> {
     let inputs = defs
         .iter()
         .map(|(p, n, s)| (MsgId::new(*p, *n), parse_message(s).unwrap()))
@@ -149,7 +149,7 @@ fn dds_codegen_emits_type_description_registry_helper() {
             "std_msgs/Header header\ngeometry_msgs/Point point\n",
         ),
     ]);
-    let code = roscmp::codegen::rust::generate_dds(&roscmp::ir::Program { messages: msgs });
+    let code = roswell::codegen::rust::generate_dds(&roswell::ir::Program { messages: msgs });
     assert!(code.contains("pub fn register_type_descriptions"));
     assert!(code.contains("demo/msg/StampedPoint"));
     assert!(code.contains("std_msgs/msg/Header"));

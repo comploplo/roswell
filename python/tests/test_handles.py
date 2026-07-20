@@ -11,7 +11,7 @@ import gc
 import numpy as np
 import pytest
 
-import roscmp
+import roswell
 
 
 def _sample_type(node, fixture_dir):
@@ -19,7 +19,7 @@ def _sample_type(node, fixture_dir):
 
 
 def test_view_keeps_message_alive(fixture_dir):
-    node = roscmp.Node("py_view", domain=0)
+    node = roswell.Node("py_view", domain=0)
     try:
         T = _sample_type(node, fixture_dir)
         msg = T.alloc()
@@ -44,7 +44,7 @@ def test_view_keeps_message_alive(fixture_dir):
 
 
 def test_closed_message_access_raises(fixture_dir):
-    node = roscmp.Node("py_close", domain=0)
+    node = roswell.Node("py_close", domain=0)
     try:
         T = _sample_type(node, fixture_dir)
         msg = T.alloc()
@@ -52,16 +52,16 @@ def test_closed_message_access_raises(fixture_dir):
         assert msg.label == "hi"
 
         msg.close()
-        with pytest.raises(roscmp.RoscmpError):
+        with pytest.raises(roswell.RoswellError):
             _ = msg.label
-        with pytest.raises(roscmp.RoscmpError):
+        with pytest.raises(roswell.RoswellError):
             msg.label = "again"
     finally:
         node.close()
 
 
 def test_double_close_is_noop(fixture_dir):
-    node = roscmp.Node("py_dclose", domain=0)
+    node = roswell.Node("py_dclose", domain=0)
     try:
         T = _sample_type(node, fixture_dir)
         msg = T.alloc()
@@ -72,7 +72,7 @@ def test_double_close_is_noop(fixture_dir):
 
 
 def test_wrong_type_publish_raises(fixture_dir, sample_dir):
-    node = roscmp.Node("py_mismatch", domain=0)
+    node = roswell.Node("py_mismatch", domain=0)
     try:
         T = _sample_type(node, fixture_dir)
         req_t, _resp_t = node.load_service(
@@ -80,17 +80,17 @@ def test_wrong_type_publish_raises(fixture_dir, sample_dir):
         )
         pub = node.publisher("/py_mismatch", T)
         wrong = req_t.alloc()  # a different type than the publisher's
-        with pytest.raises(roscmp.TypeMismatchError):
+        with pytest.raises(roswell.TypeMismatchError):
             pub.publish(wrong)
     finally:
         node.close()
 
 
 def test_use_after_shutdown_raises(fixture_dir):
-    node = roscmp.Node("py_uaf", domain=0)
+    node = roswell.Node("py_uaf", domain=0)
     T = _sample_type(node, fixture_dir)
     pub = node.publisher("/py_uaf", T)
     msg = pub.new()
     node.close()  # shuts the context down, invalidating the publisher handle
-    with pytest.raises(roscmp.StaleHandleError):
+    with pytest.raises(roswell.StaleHandleError):
         pub.publish(msg)

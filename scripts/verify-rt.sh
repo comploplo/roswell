@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Re-discharge the machine-checked real-time proofs (Creusot + Why3).
 #
-# Verifies the pure hot-path cores in the `roscmp-verify` crate: panic-freedom
+# Verifies the pure hot-path cores in the `roswell-verify` crate: panic-freedom
 # and functional contracts for the CDR alignment arithmetic (`pad_to`), layout
 # offset rounding (`round_up`), timer catch-up scheduling (`next_fire_after`),
 # and the tunnel bounded-queue policy (`plan_enqueue`). See docs/RT.md for the
@@ -48,6 +48,6 @@ fi
 ARGS=(--no-check-version)
 [ "${1:-}" = "--replay" ] && ARGS+=(--replay)
 
-echo "==> Discharging real-time proofs (roscmp-verify) with Creusot + Why3"
+echo "==> Discharging real-time proofs (roswell-verify) with Creusot + Why3"
 cargo creusot "${ARGS[@]}"
 echo "All real-time proofs discharged."

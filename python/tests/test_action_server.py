@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-import roscmp
+import roswell
 
 ACTION = "/fib_srv"
 ACTION_TYPE = "example_interfaces/action/Fibonacci"
@@ -43,8 +43,8 @@ def _execute(goal, handle):
 
 @pytest.fixture
 def server_and_client():
-    server_node = roscmp.Node("fib_srv_server", domain=0)
-    client_node = roscmp.Node("fib_srv_client", domain=0)
+    server_node = roswell.Node("fib_srv_server", domain=0)
+    client_node = roswell.Node("fib_srv_client", domain=0)
     cancel_events = []
     server = server_node.action_server(
         ACTION, ACTION_TYPE, _execute, cancel_callback=cancel_events.append
@@ -65,7 +65,7 @@ def _send_goal(ac, order, tries=25):
     for _ in range(tries):
         try:
             return ac.send_goal_sync(goal, timeout=2.0)
-        except roscmp.RoscmpTimeout:
+        except roswell.RoswellTimeout:
             continue
     pytest.fail("send_goal never got a reply")
 
@@ -74,7 +74,7 @@ def _get_result(ac, goal_id, tries=25):
     for _ in range(tries):
         try:
             return ac.get_result_sync(goal_id, timeout=2.0)
-        except roscmp.RoscmpTimeout:
+        except roswell.RoswellTimeout:
             continue
     pytest.fail("get_result never got a reply")
 
@@ -122,8 +122,8 @@ def test_cancel_mid_goal(server_and_client):
 
 
 def test_async_execute_callback():
-    server_node = roscmp.Node("fib_async_server", domain=0)
-    client_node = roscmp.Node("fib_async_client", domain=0)
+    server_node = roswell.Node("fib_async_server", domain=0)
+    client_node = roswell.Node("fib_async_client", domain=0)
 
     async def execute(goal, handle):
         result = server.new_result()

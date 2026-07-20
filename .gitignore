@@ -1,6 +1,7 @@
 /target
 /generated
 python/.venv-test/
+python/roswell.egg-info/
 python/roscmp.egg-info/
 
 # Creusot verification: keep the proof sessions (verif/**/proof.json) checked

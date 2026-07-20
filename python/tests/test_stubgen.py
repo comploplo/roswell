@@ -1,7 +1,7 @@
 """Typed-stub generation from the Rust layout JSON.
 
 The generator is pure formatting: every field kind/offset comes from
-``rcm_type_layout_json`` (the same metadata the runtime consumes), so these
+``ros_type_layout_json`` (the same metadata the runtime consumes), so these
 tests assert the emitted ``.pyi`` text for bundled, nested-closure, and
 workspace-fixture custom types — and, when mypy is installed, that the stubs
 actually typecheck a using snippet.
@@ -12,7 +12,7 @@ import sys
 
 import pytest
 
-from roscmp import stubgen
+from roswell import stubgen
 
 
 def test_generates_stub_modules_for_closures(tmp_path, fixture_dir):
@@ -65,9 +65,9 @@ def test_cli_entrypoint(tmp_path, capsys):
 
 
 def test_unknown_package_errors(tmp_path):
-    import roscmp
+    import roswell
 
-    with pytest.raises(roscmp.RoscmpError):
+    with pytest.raises(roswell.RoswellError):
         stubgen.generate(["no_such_pkg"], tmp_path)
 
 

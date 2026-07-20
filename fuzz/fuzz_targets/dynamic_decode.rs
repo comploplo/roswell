@@ -1,6 +1,6 @@
 #![no_main]
 //! Fuzz the runtime, layout-driven CDR codec over C-ABI memory
-//! (`roscmp::dynamic`) — the unsafe walker surface.
+//! (`roswell::dynamic`) — the unsafe walker surface.
 //!
 //! A fixed set of `DynamicType`s (built once) covers scalars, strings, fixed
 //! arrays, primitive/string/message sequences and nesting. For each, we decode
@@ -18,13 +18,13 @@ use std::sync::OnceLock;
 
 use libfuzzer_sys::fuzz_target;
 
-use roscmp::cdr::Encoding;
-use roscmp::dynamic::DynamicType;
-use roscmp::ir::MsgId;
-use roscmp::{parse_message, resolve};
+use roswell::cdr::Encoding;
+use roswell::dynamic::DynamicType;
+use roswell::ir::MsgId;
+use roswell::{parse_message, resolve};
 
 /// Build a `DynamicType` from inline `(package, Name, body)` sources; the first
-/// entry is the root. Mirrors `roscmp-dds/tests/dynamic_byte_equality.rs`.
+/// entry is the root. Mirrors `roswell-ros2-compat/tests/dynamic_byte_equality.rs`.
 fn dyn_type(sources: &[(&str, &str, &str)]) -> DynamicType {
     let inputs = sources
         .iter()

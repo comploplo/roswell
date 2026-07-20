@@ -2,12 +2,12 @@
 
 import asyncio
 
-import roscmp
+import roswell
 
 
 def test_timer_fires_periodically():
     async def run():
-        node = roscmp.Node("py_timer", domain=0)
+        node = roswell.Node("py_timer", domain=0)
         try:
             ticks = []
             timer = node.create_timer(0.02, lambda: ticks.append(1))
@@ -27,7 +27,7 @@ def test_timer_fires_periodically():
 
 def test_timer_async_callback():
     async def run():
-        node = roscmp.Node("py_timer_async", domain=0)
+        node = roswell.Node("py_timer_async", domain=0)
         try:
             ticks = []
 
@@ -46,7 +46,7 @@ def test_timer_async_callback():
 
 def test_node_close_cancels_timers():
     async def run():
-        node = roscmp.Node("py_timer_close", domain=0)
+        node = roswell.Node("py_timer_close", domain=0)
         ticks = []
         node.create_timer(0.02, lambda: ticks.append(1))
         await asyncio.sleep(0.05)

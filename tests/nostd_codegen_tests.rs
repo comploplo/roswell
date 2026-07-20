@@ -11,10 +11,10 @@
 
 use std::process::Command;
 
-use roscmp::codegen;
-use roscmp::codegen::rust_nostd::Caps;
-use roscmp::ir::MsgId;
-use roscmp::{parse_message, resolve};
+use roswell::codegen;
+use roswell::codegen::rust_nostd::Caps;
+use roswell::ir::MsgId;
+use roswell::{parse_message, resolve};
 
 /// Generate std + no_std bindings for `defs`, append `main_body`, compile, run.
 fn run_twin(defs: &[(&str, &str, &str)], main_body: &str, tag: &str) -> String {
@@ -31,7 +31,7 @@ fn run_twin(defs: &[(&str, &str, &str)], main_body: &str, tag: &str) -> String {
     code.push_str(main_body);
     code.push_str("\n}\n");
 
-    let dir = std::env::temp_dir().join(format!("roscmp_nostd_{tag}"));
+    let dir = std::env::temp_dir().join(format!("roswell_nostd_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let src = dir.join("gen.rs");
@@ -320,7 +320,7 @@ fn overflow_is_an_error_never_truncation_or_panic() {
 }
 
 /// The committed firmware bindings (`hil-renode/fw/src/msgs_nostd.rs`) must be
-/// exactly what `roscmp --lang rust --no-std` emits for Vector3 + Twist today.
+/// exactly what `roswell --lang rust --no-std` emits for Vector3 + Twist today.
 #[test]
 fn firmware_twist_bindings_are_fresh() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -341,7 +341,7 @@ fn firmware_twist_bindings_are_fresh() {
 
     // The committed file is `cargo fmt`ed (the fw workspace fmt gate covers
     // it), so normalize the generated text the same way before comparing.
-    let dir = std::env::temp_dir().join("roscmp_nostd_fw_fresh");
+    let dir = std::env::temp_dir().join("roswell_nostd_fw_fresh");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("gen.rs");
@@ -360,7 +360,7 @@ fn firmware_twist_bindings_are_fresh() {
         committed, expected,
         "hil-renode/fw/src/msgs_nostd.rs is stale; regenerate with \
          `cargo run -- --lang rust --no-std --out <dir> samples/geometry_msgs/msg/Vector3.msg \
-         samples/geometry_msgs/msg/Twist.msg`, copy roscmp_msgs_nostd.rs over it, \
+         samples/geometry_msgs/msg/Twist.msg`, copy roswell_msgs_nostd.rs over it, \
          then `cd hil-renode && cargo fmt`"
     );
 }

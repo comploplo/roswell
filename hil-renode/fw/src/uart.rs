@@ -1,13 +1,13 @@
-//! Minimal PL011 UART driver plus a roscmp tunnel serve loop.
+//! Minimal PL011 UART driver plus a roswell tunnel serve loop.
 //!
 //! Drives an ARM PrimeCell PL011 (modelled by Renode as `UART.PL011`) at
 //! [`UART_BASE`] with nothing but volatile MMIO — no HAL. The serve loop reads
-//! tunnel frames off the wire with the shared [`roscmp_tunnel_core`] codec and
-//! replies with roscmp frames, so a host bridge can round-trip the protocol.
+//! tunnel frames off the wire with the shared [`roswell_tunnel_core`] codec and
+//! replies with roswell frames, so a host bridge can round-trip the protocol.
 
 use core::ptr::{read_volatile, write_volatile};
 
-use roscmp_tunnel_core as wire;
+use roswell_tunnel_core as wire;
 
 use crate::msgs_nostd as msgs;
 
@@ -138,7 +138,7 @@ pub fn serve() -> ! {
             }
             match wire::parse_payload(&payload[..len]) {
                 Ok(wire::FrameRef::Hello { .. }) => {
-                    if let Ok(n) = wire::encode_hello(&mut out, "roscmp-mcu") {
+                    if let Ok(n) = wire::encode_hello(&mut out, "roswell-mcu") {
                         put(&out[..n]);
                     }
                 }

@@ -2,13 +2,13 @@
 
 import pytest
 
-import roscmp
-import roscmp.bag
+import roswell
+import roswell.bag
 
 
 @pytest.fixture
 def node():
-    n = roscmp.Node("bag_node", domain=0)
+    n = roswell.Node("bag_node", domain=0)
     try:
         yield n
     finally:
@@ -20,7 +20,7 @@ def test_write_read_roundtrip(node, tmp_path):
     String = node.load_type("std_msgs/msg/String")
     Imu = node.load_type("sensor_msgs/msg/Imu")
 
-    with roscmp.bag.open_write(path) as bag:
+    with roswell.bag.open_write(path) as bag:
         s = String.alloc()
         s.data = "hello bag"
         bag.write("/chatter", s, 1_000)
@@ -31,7 +31,7 @@ def test_write_read_roundtrip(node, tmp_path):
         bag.write("/imu", imu, 2_000)
         imu.close()
 
-    samples = list(roscmp.bag.read(path))
+    samples = list(roswell.bag.read(path))
     assert [(m.topic, m.type, m.log_time) for m in samples] == [
         ("/chatter", "std_msgs/msg/String", 1_000),
         ("/imu", "sensor_msgs/msg/Imu", 2_000),
@@ -47,13 +47,13 @@ def test_write_read_roundtrip(node, tmp_path):
 def test_read_raw_bytes(node, tmp_path):
     path = tmp_path / "raw.mcap"
     String = node.load_type("std_msgs/msg/String")
-    with roscmp.bag.open_write(path, compression="none") as bag:
+    with roswell.bag.open_write(path, compression="none") as bag:
         s = String.alloc()
         s.data = "raw"
         bag.write("/chatter", s, 5)
         s.close()
 
-    (sample,) = roscmp.bag.read(path, decode=False)
+    (sample,) = roswell.bag.read(path, decode=False)
     assert sample.raw
     assert isinstance(sample.message, bytes)
     # Full CDR: little-endian encapsulation header, then u32 length + "raw\0".
@@ -63,24 +63,24 @@ def test_read_raw_bytes(node, tmp_path):
 
 def test_unresolvable_type_falls_back_to_raw(tmp_path, fixture_dir):
     ws = fixture_dir / "ws"
-    node = roscmp.Node("bag_ws_node", domain=0, type_paths=[ws])
+    node = roswell.Node("bag_ws_node", domain=0, type_paths=[ws])
     try:
         Detection = node.load_type("robot_msgs/msg/Detection")
         path = tmp_path / "custom.mcap"
-        with roscmp.bag.open_write(path) as bag:
+        with roswell.bag.open_write(path) as bag:
             d = Detection.alloc()
             d.label = "cone"
             bag.write("/detections", d, 7)
             d.close()
 
         # Without the workspace root the type cannot resolve: raw fallback.
-        (sample,) = roscmp.bag.read(path)
+        (sample,) = roswell.bag.read(path)
         assert sample.type == "robot_msgs/msg/Detection"
         assert sample.raw
         assert b"cone" in sample.message
 
         # With the workspace root it decodes.
-        (decoded,) = roscmp.bag.read(path, type_paths=[ws])
+        (decoded,) = roswell.bag.read(path, type_paths=[ws])
         assert not decoded.raw
         assert decoded.message.label == "cone"
     finally:
@@ -88,7 +88,7 @@ def test_unresolvable_type_falls_back_to_raw(tmp_path, fixture_dir):
 
 
 def test_writer_close_is_idempotent_and_repr(node, tmp_path):
-    bag = roscmp.bag.open_write(tmp_path / "x.mcap")
+    bag = roswell.bag.open_write(tmp_path / "x.mcap")
     assert "open" in repr(bag)
     bag.close()
     bag.close()

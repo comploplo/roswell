@@ -1,20 +1,20 @@
-//! no_std Cortex-M firmware proving a no-DDS MCU can speak the roscmp tunnel
-//! wire protocol using the shared [`roscmp_tunnel_core`] codec.
+//! no_std Cortex-M firmware proving a no-DDS MCU can speak the roswell tunnel
+//! wire protocol using the shared [`roswell_tunnel_core`] codec.
 //!
 //! Two behaviours, selected at build time:
 //!
-//! * default: run [`self_check`] (encode/parse roscmp frames entirely in the
+//! * default: run [`self_check`] (encode/parse roswell frames entirely in the
 //!   MCU) and, on success, call [`hil_marker`] — hilt hooks that symbol to log
 //!   `HIL OK`, so the host asserts the codec runs on simulated silicon.
 //! * `--features uart`: additionally serve a PL011 UART — parse inbound tunnel
-//!   frames and reply with roscmp `Ack`/`Hello` frames, so a host bridge can
+//!   frames and reply with roswell `Ack`/`Hello` frames, so a host bridge can
 //!   round-trip the protocol over a wire.
 
 #![no_std]
 #![no_main]
 
 use cortex_m_rt::entry;
-use roscmp_tunnel_core as wire;
+use roswell_tunnel_core as wire;
 
 #[cfg(feature = "uart")]
 mod msgs_nostd;
@@ -37,7 +37,7 @@ pub extern "C" fn hil_marker() {
     unsafe { core::arch::asm!("nop", options(nomem, nostack)) }
 }
 
-/// Exercises the shared codec: encode roscmp frames, then parse them back and
+/// Exercises the shared codec: encode roswell frames, then parse them back and
 /// check every field. Returns `true` iff the round-trips are exact.
 fn self_check() -> bool {
     let mut buf = [0u8; 256];

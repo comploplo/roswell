@@ -1,4 +1,4 @@
-//! End-to-end HIL tests: a no_std Cortex-M firmware speaking the roscmp tunnel
+//! End-to-end HIL tests: a no_std Cortex-M firmware speaking the roswell tunnel
 //! protocol, run inside Renode via `hilt`.
 //!
 //! The tests are `#[ignore]`d because they need a Renode image and each takes
@@ -8,7 +8,7 @@
 //! amd64 image under `qemu-user` never finishes `LoadPlatformDescription`). Run:
 //!
 //! ```text
-//! cargo test -p roscmp-hil -- --ignored
+//! cargo test -p roswell-hil -- --ignored
 //! ```
 
 use std::io::{Read, Write};
@@ -19,7 +19,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use hilt::{HilConfig, MachineSpec, Platform, ReplSource};
-use roscmp_tunnel_core as wire;
+use roswell_tunnel_core as wire;
 
 const UART_PORT: u16 = 13456;
 /// Separate port for the Twist-encoding test so the two UART tests never share
@@ -39,7 +39,7 @@ fn build_firmware(features: &[&str]) -> PathBuf {
     cmd.current_dir(&manifest).args([
         "build",
         "-p",
-        "roscmp-hil-fw",
+        "roswell-hil-fw",
         "--target",
         "thumbv6m-none-eabi",
         "--release",
@@ -69,7 +69,7 @@ fn build_firmware(features: &[&str]) -> PathBuf {
 }
 
 /// Stage A: the codec runs on simulated silicon. The firmware self-checks the
-/// roscmp frame codec and, on success, hits `hil_marker` → Renode logs `HIL OK`.
+/// roswell frame codec and, on success, hits `hil_marker` → Renode logs `HIL OK`.
 #[test]
 #[ignore = "requires a Renode image (auto-built on arm64); slow (~2 min) — run with --ignored, see README"]
 fn tunnel_codec_runs_on_cortex_m() {
@@ -79,7 +79,7 @@ fn tunnel_codec_runs_on_cortex_m() {
     assert!(output.passed(), "expected HIL OK marker.\n{output}");
 }
 
-/// Stage B: an MCU speaks the roscmp tunnel over UART. The host sends a
+/// Stage B: an MCU speaks the roswell tunnel over UART. The host sends a
 /// `TopicSample` frame down the bridged UART; the firmware parses it and replies
 /// with an `Ack`, proving a no-DDS MCU round-trips the protocol over a wire.
 #[test]
@@ -129,7 +129,7 @@ fn mcu_acks_topic_sample_over_uart() {
 /// the firmware encodes a real `geometry_msgs/msg/Twist` with the `--no-std`
 /// generated codec (`fw/src/msgs_nostd.rs`) and ships it as a tunnel
 /// `TopicSample`; this test decodes the CDR bytes with the **std** generated
-/// decoder (`roscmp_dds::msgs`) and asserts every field value.
+/// decoder (`roswell_ros2_compat::msgs`) and asserts every field value.
 #[test]
 #[ignore = "requires a Renode image (auto-built on arm64); slow (~2 min) — run with --ignored, see README"]
 fn mcu_encodes_real_twist_cdr_over_uart() {
@@ -177,7 +177,7 @@ fn mcu_encodes_real_twist_cdr_over_uart() {
     );
 
     // Decode the MCU-encoded CDR with the std generated decoder.
-    let twist = roscmp_dds::msgs::geometry_msgs__Twist::from_cdr(&cdr)
+    let twist = roswell_ros2_compat::msgs::geometry_msgs__Twist::from_cdr(&cdr)
         .expect("MCU CDR must decode with the std decoder");
     assert_eq!(twist.linear.x, 1.25);
     assert_eq!(twist.linear.y, -2.5);

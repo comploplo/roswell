@@ -1,5 +1,5 @@
 [package]
-name = "roscmp"
+name = "roswell"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -12,13 +12,13 @@ sha2 = "0.11.0"
 # contracts proven with Creusot). `dynamic::round_up` delegates here; the
 # equivalence test pins the embedded CDR padding formula to its verified twin.
 # A tiny in-workspace crate with no external deps. See docs/RT.md.
-roscmp-verify = { path = "roscmp-verify", version = "0.1.0" }
+roswell-verify = { path = "roswell-verify", version = "0.1.0" }
 
 [lints]
 workspace = true
 
 [workspace]
-members = [".", "roscmp-dds", "roscmp-c", "roscmp-verify", "roscmp-tunnel-core", "roscmp-build"]
+members = [".", "roswell-ros2-compat", "roswell-c", "roswell-verify", "roswell-tunnel-core", "roswell-build"]
 # `fuzz/` is a detached cargo-fuzz crate (nightly + libfuzzer only); keep it out
 # of the stable `--workspace` gate. See fuzz/Cargo.toml.
 exclude = ["fuzz", "hil-renode"]

@@ -1375,31 +1375,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
-name = "roscmp"
+name = "roswell"
 version = "0.1.0"
 dependencies = [
  "nom",
- "roscmp-verify",
+ "roswell-verify",
  "sha2",
 ]
 
 [[package]]
-name = "roscmp-build"
+name = "roswell-build"
 version = "0.1.0"
 dependencies = [
- "roscmp",
+ "roswell",
 ]
 
 [[package]]
-name = "roscmp-c"
+name = "roswell-c"
 version = "0.1.0"
 dependencies = [
- "roscmp",
- "roscmp-dds",
+ "roswell",
+ "roswell-ros2-compat",
 ]
 
 [[package]]
-name = "roscmp-dds"
+name = "roswell-ros2-compat"
 version = "0.1.0"
 dependencies = [
  "bytes",
@@ -1409,9 +1409,9 @@ dependencies = [
  "mio 0.8.11",
  "quick-xml",
  "ratatui",
- "roscmp",
- "roscmp-tunnel-core",
- "roscmp-verify",
+ "roswell",
+ "roswell-tunnel-core",
+ "roswell-verify",
  "rustdds",
  "ruzstd",
  "serialport",
@@ -1419,11 +1419,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "roscmp-tunnel-core"
+name = "roswell-tunnel-core"
 version = "0.1.0"
 
 [[package]]
-name = "roscmp-verify"
+name = "roswell-verify"
 version = "0.1.0"
 dependencies = [
  "creusot-std",

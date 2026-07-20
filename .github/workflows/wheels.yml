@@ -1,0 +1,145 @@
+name: Wheels
+
+# Build wheels + sdist. Runs on demand (Actions tab / `gh workflow run wheels.yml`)
+# and automatically when a GitHub Release is published — in which case the
+# artifacts are smoke-tested and published to PyPI via trusted publishing.
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      # The sdist force-includes the parent-dir Rust sources, so cibuildwheel can
+      # build wheels from it in an isolated container/host.
+      - run: uv build --sdist --out-dir dist python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  wheels:
+    needs: sdist
+    name: wheels (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+          - os: macos-latest
+            arch: universal2
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # cibuildwheel config lives in python/pyproject.toml; building from the
+      # sdist file makes it self-contained. Native runner per arch (no QEMU).
+      - run: pipx run cibuildwheel==3.1.4 dist/*.tar.gz --output-dir wheelhouse
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+
+  # Install each freshly built wheel on its native runner and exercise the
+  # runtime beyond a bare import: load a bundled interface and touch its fields.
+  smoke:
+    needs: wheels
+    name: smoke (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+          - os: macos-latest
+            arch: universal2
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-${{ matrix.arch }}
+          path: dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install dist/*.whl
+      - run: |
+          python - <<'PY'
+          import roswell
+          node = roswell.Node("smoke", domain=0)
+          v = node.load_type("geometry_msgs/msg/Vector3.msg").alloc()
+          v.x, v.y, v.z = 1.5, -2.0, 0.25
+          assert (v.x, v.y, v.z) == (1.5, -2.0, 0.25), (v.x, v.y, v.z)
+          print("smoke ok — Vector3 roundtrip via", roswell.__file__)
+          PY
+
+  # Refuse to publish unless the release tag matches the version PyPI will see
+  # (single-sourced from roswell-c/Cargo.toml). Guards against tagging without
+  # bumping the crate, which would upload the wrong version or 400 on a dup.
+  check-version:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          crate=$(grep -m1 '^version = ' roswell-c/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          tag='${{ github.event.release.tag_name }}'
+          tag="${tag#v}"
+          echo "crate version: $crate | release tag: $tag"
+          [ "$crate" = "$tag" ] || { echo "::error::release tag ($tag) != roswell-c version ($crate)"; exit 1; }
+
+  # Refuse to publish unless the CI workflow is green for this exact commit.
+  ci-passed:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha='${{ github.sha }}'
+          for i in $(seq 1 40); do
+            run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+                    --commit "$sha" --limit 1 --json status,conclusion \
+                    --jq '.[0] | "\(.status) \(.conclusion)"')
+            echo "CI for $sha: ${run:-<none yet>}"
+            case "$run" in
+              "completed success") exit 0 ;;
+              completed*) echo "::error::CI did not pass for $sha (${run#completed })"; exit 1 ;;
+            esac
+            sleep 15
+          done
+          echo "::error::timed out waiting for CI on $sha"; exit 1
+
+  publish:
+    needs: [sdist, wheels, smoke, check-version, ci-passed]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # trusted publishing (OIDC); no API token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true # flatten sdist + all wheels into dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

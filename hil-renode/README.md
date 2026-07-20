@@ -1,21 +1,21 @@
-# hil-renode — roscmp tunnel-over-UART, on simulated silicon
+# Renode HIL: Roswell Tunnel Over UART
 
-Proves the strategic claim *"an MCU speaks ROS 2 via the roscmp tunnel bridge,
-no micro-ROS"* without physical hardware: a no_std Cortex-M firmware runs the
-**same** `roscmp` tunnel frame codec the host bridge uses, inside a
-[Renode](https://renode.io) simulation driven by [`hilt`](../../../hardware/hilt).
+This workspace shows that an MCU can speak selected ROS 2 topics through the Roswell tunnel
+bridge, without micro-ROS and without physical hardware: a no_std Cortex-M
+firmware runs the same Roswell tunnel frame codec as the host bridge inside a
+[Renode](https://renode.io) simulation driven by the `hilt` crate.
 
-This is a standalone workspace (not part of the root roscmp `--workspace` gate,
+This is a standalone workspace (not part of the root roswell `--workspace` gate,
 like `fuzz/`): the firmware cross-compiles to `thumbv6m-none-eabi`, the harness
 runs on the host.
 
 ## Layout
 
-- `fw/` — the firmware crate (`roscmp-hil-fw`). `src/main.rs` self-checks the
+- `fw/` — the firmware crate (`roswell-hil-fw`). `src/main.rs` self-checks the
   codec and calls `hil_marker` (hooked by hilt to log `HIL OK`);
   `src/uart.rs` (feature `uart`) drives a PL011 UART and answers tunnel frames.
-  Both use the shared no_std [`roscmp-tunnel-core`](../roscmp-tunnel-core) crate.
-  `src/msgs_nostd.rs` is the `roscmp --lang rust --no-std` generated
+  Both use the shared no_std [`roswell-tunnel-core`](../roswell-tunnel-core) crate.
+  `src/msgs_nostd.rs` is the `roswell --lang rust --no-std` generated
   heapless CDR bindings for `geometry_msgs` Vector3/Twist (freshness pinned by
   the root `tests/nostd_codegen_tests.rs`).
 - `tests/tunnel_hil.rs` — the host HIL tests:
@@ -30,34 +30,32 @@ runs on the host.
 ## Running
 
 ```sh
-cargo test -p roscmp-hil -- --ignored     # runs the Renode-backed HIL tests
+cargo test -p roswell-hil -- --ignored     # runs the Renode-backed HIL tests
 ```
 
 The firmware alone builds and its symbols/vector table verify without Renode:
 
 ```sh
-cargo build -p roscmp-hil-fw --target thumbv6m-none-eabi --release
-cargo build -p roscmp-hil-fw --target thumbv6m-none-eabi --release --features uart
+cargo build -p roswell-hil-fw --target thumbv6m-none-eabi --release
+cargo build -p roswell-hil-fw --target thumbv6m-none-eabi --release --features uart
 ```
 
-## Why the HIL tests are `#[ignore]`d here
+## Why The HIL Tests Are Ignored
 
 They need a Renode container image and each takes ~2 min (the simulation runs
 its full `RunFor` window), so they're too slow for the default `cargo test` and
-are gated behind `--ignored`.
+are gated behind Rust's `#[ignore]` attribute and the `--ignored` test flag.
 
 `hilt` selects the image by host architecture: the amd64 `antmicro/renode` on
 x86-64, or a **native `linux-arm64`** image it builds on demand on Apple-Silicon.
-The amd64 image is avoided on arm64 because, under `qemu-user` in podman's Linux
-VM (Rosetta is deliberately disabled there), `machine LoadPlatformDescription`
-never completes (>400 s, measured) — the native image loads it in ~3 s. Both
-Stage A and Stage B pass live on this Apple-Silicon host with the native image.
+The amd64 image is avoided on arm64 because emulation can make Renode platform
+loading prohibitively slow. The native image avoids that delay.
 
 Running them needs `cargo install cargo-binutils` (provides `rust-objdump` /
 `rust-nm`, which `hilt` uses to read the firmware vector table).
 
-The protocol itself is also verified on this host without Renode by:
+The protocol is also verified without Renode by:
 
-- `cargo test -p roscmp-tunnel-core` — the codec's own round-trip tests,
-- `cargo test -p roscmp-dds --test tunnel_core_equivalence` — byte-for-byte
+- `cargo test -p roswell-tunnel-core` — the codec's own round-trip tests,
+- `cargo test -p roswell-ros2-compat --test tunnel_core_equivalence` — byte-for-byte
   equivalence between the host `tunnel` codec and this no_std core.

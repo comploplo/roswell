@@ -5,7 +5,7 @@
 
 use libfuzzer_sys::fuzz_target;
 
-use roscmp::{parse_action, parse_message, parse_service};
+use roswell::{parse_action, parse_message, parse_service};
 
 fuzz_target!(|data: &[u8]| {
     let src = String::from_utf8_lossy(data);

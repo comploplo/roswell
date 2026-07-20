@@ -17,7 +17,7 @@
 //! same field values and drive the same [`crate::cdr`] `Writer` primitives in
 //! the same order; the memory layout is computed with the same `#[repr(C)]`
 //! rules the codegen backends rely on (verified in `tests/layout_tests.rs`).
-//! Both facts are proven against the generated types in `roscmp-dds/tests`.
+//! Both facts are proven against the generated types in `roswell-ros2-compat/tests`.
 #![allow(clippy::cast_ptr_alignment)]
 // every raw access here is read/write_unaligned
 // This module is one cohesive unsafe layer over C-ABI memory; each `unsafe fn`
@@ -278,6 +278,22 @@ impl DynamicType {
         let mut w = Writer::with_encoding(Endian::Little, encoding);
         self.encode_message(&self.root, ptr, &mut w);
         Ok(w.finish())
+    }
+
+    /// Like [`encode`](DynamicType::encode) but serializes into `buf`, reusing
+    /// its allocation. `buf` is cleared and refilled with the full CDR message
+    /// (encapsulation header + body), byte-for-byte identical to [`encode`].
+    /// Passing a buffer sized to a prior same-typed sample eliminates the
+    /// reallocation churn a fresh `Vec` incurs while growing — the win that
+    /// makes the loaned-buffer publish path worthwhile.
+    ///
+    /// # Safety
+    /// Same as [`encode`](DynamicType::encode).
+    pub unsafe fn encode_into(&self, ptr: *const u8, buf: &mut Vec<u8>) {
+        let taken = std::mem::take(buf);
+        let mut w = Writer::from_vec(taken, Endian::Little, Encoding::Xcdr1);
+        self.encode_message(&self.root, ptr, &mut w);
+        *buf = w.finish();
     }
 
     unsafe fn encode_message(&self, id: &MsgId, base: *const u8, w: &mut Writer) {
@@ -617,8 +633,8 @@ fn round_up(off: usize, align: usize) -> usize {
     debug_assert!(align.is_power_of_two());
     // Machine-checked (Creusot): `off <= result < off + align`, `result` is a
     // multiple of `align`, and the arithmetic never overflows for `align > 0`
-    // with `off + align <= usize::MAX`. See `roscmp_verify::round_up`.
-    roscmp_verify::round_up(off, align)
+    // with `off + align <= usize::MAX`. See `roswell_verify::round_up`.
+    roswell_verify::round_up(off, align)
 }
 
 // ---- raw memory access ------------------------------------------------------

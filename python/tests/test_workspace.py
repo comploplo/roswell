@@ -1,6 +1,6 @@
 """Reference-based type resolution across a synthetic multi-package workspace.
 
-Resolution and dependency walking happen in Rust (``rcm_type_resolve``); these
+Resolution and dependency walking happen in Rust (``ros_type_resolve``); these
 tests prove the Python ``type_paths`` surface finds custom packages laid out both
 as a plain colcon tree and as an ament ``share/`` install prefix, and that nested
 cross-package dependencies (into a second user package and into the bundled
@@ -11,7 +11,7 @@ import time
 
 import numpy as np
 
-import roscmp
+import roswell
 
 
 def _ws(fixture_dir):
@@ -20,7 +20,7 @@ def _ws(fixture_dir):
 
 def test_resolves_custom_type_with_bundled_and_cross_package_deps(fixture_dir):
     # Detection -> geometry_msgs/Point (bundled) + sensor_pkg/Reading (2nd user pkg)
-    node = roscmp.Node("ws_node", domain=0, type_paths=[_ws(fixture_dir)])
+    node = roswell.Node("ws_node", domain=0, type_paths=[_ws(fixture_dir)])
     try:
         T = node.load_type("robot_msgs/msg/Detection")
         assert T.dds_type == "robot_msgs::msg::dds_::Detection_"
@@ -47,7 +47,7 @@ def test_resolves_custom_type_with_bundled_and_cross_package_deps(fixture_dir):
 
 def test_ament_share_layout_resolves(fixture_dir):
     install = fixture_dir / "ws_install"
-    node = roscmp.Node("ws_ament", domain=0, type_paths=[install])
+    node = roswell.Node("ws_ament", domain=0, type_paths=[install])
     try:
         T = node.load_type("foo_msgs/msg/Beacon")
         assert T.dds_type == "foo_msgs::msg::dds_::Beacon_"
@@ -57,8 +57,8 @@ def test_ament_share_layout_resolves(fixture_dir):
 
 
 def test_env_var_search_root(fixture_dir, monkeypatch):
-    monkeypatch.setenv("ROSCMP_TYPE_PATH", str(_ws(fixture_dir)))
-    node = roscmp.Node("ws_env", domain=0)
+    monkeypatch.setenv("ROSWELL_TYPE_PATH", str(_ws(fixture_dir)))
+    node = roswell.Node("ws_env", domain=0)
     try:
         T = node.load_type("sensor_pkg/msg/Reading")
         assert T.dds_type == "sensor_pkg::msg::dds_::Reading_"
@@ -67,7 +67,7 @@ def test_env_var_search_root(fixture_dir, monkeypatch):
 
 
 def test_custom_type_pubsub_roundtrip(fixture_dir):
-    node = roscmp.Node("ws_pubsub", domain=0, type_paths=[_ws(fixture_dir)])
+    node = roswell.Node("ws_pubsub", domain=0, type_paths=[_ws(fixture_dir)])
     try:
         T = node.load_type("robot_msgs/msg/Detection")
         pub = node.publisher("/ws_detection", T)
@@ -93,13 +93,13 @@ def test_custom_type_pubsub_roundtrip(fixture_dir):
 
 
 def test_unknown_reference_raises(fixture_dir):
-    node = roscmp.Node("ws_err", domain=0, type_paths=[_ws(fixture_dir)])
+    node = roswell.Node("ws_err", domain=0, type_paths=[_ws(fixture_dir)])
     try:
         try:
             node.load_type("nope_msgs/msg/Ghost")
-        except roscmp.RoscmpError as e:
+        except roswell.RoswellError as e:
             assert "could not find" in str(e)
         else:
-            raise AssertionError("expected RoscmpError for unknown reference")
+            raise AssertionError("expected RoswellError for unknown reference")
     finally:
         node.close()

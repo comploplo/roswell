@@ -1,8 +1,8 @@
-//! `roscmp` CLI: compile `.msg` files into Rust / C / Python bindings.
+//! `roswell` CLI: compile `.msg` files into Rust / C / Python bindings.
 //!
 //! Usage:
-//!   roscmp [--lang rust|c|python|all] [--out DIR] FILE.msg [FILE.msg ...]
-//!   roscmp --lang rust --no-std [--string-cap N] [--seq-cap N] FILE.msg ...
+//!   roswell [--lang rust|c|python|all] [--out DIR] FILE.msg [FILE.msg ...]
+//!   roswell --lang rust --no-std [--string-cap N] [--seq-cap N] FILE.msg ...
 //!
 //! Package/name are inferred from the path using the ROS layout
 //! `<package>/msg/<Name>.msg`; if there is no `msg` directory, the parent
@@ -11,15 +11,40 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use roscmp::codegen;
-use roscmp::ir::MsgId;
-use roscmp::{
+use roswell::codegen;
+use roswell::ir::MsgId;
+use roswell::{
     action_messages, parse_action, parse_idl, parse_message, parse_service, resolve,
     service_messages,
 };
 
+const HELP: &str = "roswell - compile ROS interface definitions into bindings
+
+Usage:
+  roswell [OPTIONS] FILE [FILE ...]
+
+Options:
+  --lang rust|c|python|all  Output language (default: all)
+  --out DIR                 Write generated files to DIR
+  --dds                     Add roswell-ros2-compat traits to Rust output
+  --no-std                  Generate heapless no_std Rust
+  --string-cap N            Default no_std string capacity
+  --seq-cap N               Default no_std sequence capacity
+  -h, --help                Print help
+  -V, --version             Print version
+
+Inputs may be .msg, .srv, .action, or .idl files.";
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "-h" || arg == "--help") {
+        println!("{HELP}");
+        return ExitCode::SUCCESS;
+    }
+    if args.iter().any(|arg| arg == "-V" || arg == "--version") {
+        println!("roswell {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -40,14 +65,14 @@ struct Options {
 fn run(args: &[String]) -> Result<(), String> {
     let opts = parse_args(args)?;
     if opts.files.is_empty() {
-        return Err("no input files (try `roscmp file.msg`)".into());
+        return Err("no input files (try `roswell file.msg`)".into());
     }
 
     let mut inputs = Vec::new();
     for path in &opts.files {
         let src = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let id = infer_id(path);
-        let err = |e: roscmp::ParseError| format!("{}: {e}", path.display());
+        let err = |e: roswell::ParseError| format!("{}: {e}", path.display());
         match path.extension().and_then(|s| s.to_str()) {
             Some("srv") => {
                 let svc = parse_service(&src).map_err(err)?;
@@ -75,17 +100,19 @@ fn run(args: &[String]) -> Result<(), String> {
         let (code, filename) = match (lang, opts.nostd) {
             ("rust", Some(caps)) => (
                 codegen::rust_nostd::generate(&program, caps),
-                "roscmp_msgs_nostd.rs",
+                "roswell_msgs_nostd.rs",
             ),
             (other, Some(_)) => {
                 return Err(format!(
                     "--no-std supports only `--lang rust`, not `{other}`"
                 ));
             }
-            ("rust", None) if opts.dds => (codegen::rust::generate_dds(&program), "roscmp_msgs.rs"),
-            ("rust", None) => (codegen::rust::generate(&program), "roscmp_msgs.rs"),
-            ("c", None) => (codegen::c::generate(&program), "roscmp_msgs.h"),
-            ("python", None) => (codegen::python::generate(&program), "roscmp_msgs.py"),
+            ("rust", None) if opts.dds => {
+                (codegen::rust::generate_dds(&program), "roswell_msgs.rs")
+            }
+            ("rust", None) => (codegen::rust::generate(&program), "roswell_msgs.rs"),
+            ("c", None) => (codegen::c::generate(&program), "roswell_msgs.h"),
+            ("python", None) => (codegen::python::generate(&program), "roswell_msgs.py"),
             (other, None) => return Err(format!("unknown language `{other}`")),
         };
         match &opts.out {
@@ -119,7 +146,7 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
                 i += 1;
                 out = Some(PathBuf::from(args.get(i).ok_or("--out requires a value")?));
             }
-            // Rust backend only: also emit `crate::codec::CdrMsg` impls for roscmp-dds.
+            // Rust backend only: also emit `crate::codec::CdrMsg` impls for roswell-ros2-compat.
             "--dds" => dds = true,
             // Rust backend only: heapless (core-only) profile. Declared bounds
             // (`string<=N`, `T[<=N]`) always win; these set the unbounded defaults.

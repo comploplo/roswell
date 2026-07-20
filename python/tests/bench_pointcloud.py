@@ -13,7 +13,7 @@ import time
 
 import numpy as np
 
-import roscmp
+import roswell
 
 FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures"
 PAYLOAD_BYTES = 10 * 1024 * 1024
@@ -22,7 +22,7 @@ ITERS = 30
 
 
 def main() -> None:
-    node = roscmp.Node("bench_pointcloud", domain=0)
+    node = roswell.Node("bench_pointcloud", domain=0)
     try:
         cloud_t = node.load_type(FIXTURES / "test_msgs" / "msg" / "BigCloud.msg")
         pub = node.publisher("/bench_points", cloud_t)
@@ -50,7 +50,7 @@ def main() -> None:
         p95 = sorted(samples)[int(0.95 * (len(samples) - 1))]
         mb = PAYLOAD_BYTES / (1024 * 1024)
         print(
-            f"roscmp publish() for ~{mb:.0f} MB uint8[]: "
+            f"roswell publish() for ~{mb:.0f} MB uint8[]: "
             f"median {median:.3f} ms, p95 {p95:.3f} ms "
             f"(over {ITERS} iters after {WARMUP} warmup)"
         )

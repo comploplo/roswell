@@ -1,10 +1,10 @@
 [package]
-name = "roscmp-hil-fw"
+name = "roswell-hil-fw"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 publish = false
-description = "no_std Cortex-M firmware that speaks the roscmp tunnel wire protocol, for Renode HIL tests"
+description = "no_std Cortex-M firmware that speaks the roswell tunnel wire protocol, for Renode HIL tests"
 
 [[bin]]
 name = "tunnel_selfcheck"
@@ -16,4 +16,4 @@ uart = []
 
 [dependencies]
 cortex-m-rt = "0.7"
-roscmp-tunnel-core = { path = "../../roscmp-tunnel-core" }
+roswell-tunnel-core = { path = "../../roswell-tunnel-core" }

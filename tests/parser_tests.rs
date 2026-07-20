@@ -1,5 +1,5 @@
-use roscmp::ast::*;
-use roscmp::parse_message;
+use roswell::ast::*;
+use roswell::parse_message;
 
 fn field(spec: &MessageSpec, name: &str) -> Field {
     spec.fields

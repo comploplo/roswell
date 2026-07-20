@@ -3,10 +3,10 @@
 
 use std::process::Command;
 
-use roscmp::ast::*;
-use roscmp::codegen;
-use roscmp::ir::Element;
-use roscmp::{action_messages, parse_action, parse_service, resolve, service_messages};
+use roswell::ast::*;
+use roswell::codegen;
+use roswell::ir::Element;
+use roswell::{action_messages, parse_action, parse_service, resolve, service_messages};
 
 #[test]
 fn service_splits_request_and_response() {
@@ -50,19 +50,19 @@ float64 distance
 #[test]
 fn ros1_time_and_duration_parse_and_resolve() {
     let src = "time stamp\nduration timeout\n";
-    let spec = roscmp::parse_message(src).unwrap();
+    let spec = roswell::parse_message(src).unwrap();
     assert_eq!(spec.fields[0].ty.base, BaseType::Time);
     assert_eq!(spec.fields[1].ty.base, BaseType::Duration);
 
     // They resolve to the builtin_interfaces messages.
-    let program = resolve(vec![(roscmp::ir::MsgId::new("demo", "Stamped"), spec)]).unwrap();
+    let program = resolve(vec![(roswell::ir::MsgId::new("demo", "Stamped"), spec)]).unwrap();
     let stamped = program
         .messages
         .iter()
         .find(|m| m.id.name == "Stamped")
         .unwrap();
     match &stamped.fields[0].ty {
-        roscmp::ir::ResolvedType::Scalar(Element::Message(id)) => {
+        roswell::ir::ResolvedType::Scalar(Element::Message(id)) => {
             assert_eq!(id.package, "builtin_interfaces");
             assert_eq!(id.name, "Time");
         }
@@ -73,7 +73,7 @@ fn ros1_time_and_duration_parse_and_resolve() {
 #[test]
 fn time_is_not_a_keyword_in_field_position() {
     // `float64 time` => field NAMED time, not the `time` builtin.
-    let spec = roscmp::parse_message("float64 time\n").unwrap();
+    let spec = roswell::parse_message("float64 time\n").unwrap();
     assert_eq!(spec.fields[0].name, "time");
     assert_eq!(spec.fields[0].ty.base, BaseType::Float64);
 }
@@ -97,7 +97,7 @@ int64 sum
 
     // Generated Rust (with CDR) compiles.
     let code = codegen::rust::generate(&program);
-    let dir = std::env::temp_dir().join("roscmp_srv");
+    let dir = std::env::temp_dir().join("roswell_srv");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let rs = dir.join("gen.rs");
@@ -137,7 +137,7 @@ fn action_messages_expand_to_ros2_wrappers() {
 
     let program = resolve(inputs).unwrap();
     let code = codegen::rust::generate(&program);
-    let dir = std::env::temp_dir().join("roscmp_action");
+    let dir = std::env::temp_dir().join("roswell_action");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let rs = dir.join("gen.rs");
@@ -225,7 +225,7 @@ pub fn _uses_action_traits(
 }
 ",
     );
-    let dir = std::env::temp_dir().join("roscmp_dds_action");
+    let dir = std::env::temp_dir().join("roswell_ros2_compat_action");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let rs = dir.join("gen.rs");

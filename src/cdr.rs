@@ -170,6 +170,22 @@ mod tests {
         assert_eq!(Reader::new(&buf).err(), Some(CdrError::BadEncapsulation));
     }
 
+    #[test]
+    fn from_vec_reuses_dirty_buffer_byte_identically() {
+        // The loaned-buffer hot path: a dirty, over-capacity buffer must yield
+        // the exact bytes a fresh `with_encoding` writer produces.
+        let write = |mut w: Writer| {
+            w.write_u8(1);
+            w.write_f64(2.0);
+            w.write_string("abc");
+            w.finish()
+        };
+        let fresh = write(Writer::with_encoding(Endian::Little, Encoding::Xcdr1));
+        let dirty = vec![0xAA; fresh.len() + 32];
+        let reused = write(Writer::from_vec(dirty, Endian::Little, Encoding::Xcdr1));
+        assert_eq!(reused, fresh);
+    }
+
     // ---- XCDR2 (PLAIN_CDR2) ------------------------------------------------
 
     #[test]
@@ -263,7 +279,7 @@ mod tests {
 
     /// The CDR alignment formula is embedded verbatim into generated bindings,
     /// so it cannot call an external crate. This pins the embedded `pad_to` to
-    /// its Creusot-verified twin `roscmp_verify::pad_to` across every CDR
+    /// its Creusot-verified twin `roswell_verify::pad_to` across every CDR
     /// alignment and a wide offset range, so the machine-checked panic-freedom,
     /// `result < a`, and alignment guarantees transfer to this copy. See
     /// `docs/RT.md`.
@@ -272,7 +288,7 @@ mod tests {
         for a in [1usize, 2, 4, 8] {
             for off in 0usize..1024 {
                 let p = pad_to(off, a);
-                assert_eq!(p, roscmp_verify::pad_to(off, a));
+                assert_eq!(p, roswell_verify::pad_to(off, a));
                 assert!(p < a);
                 assert_eq!((off + p) % a, 0);
             }

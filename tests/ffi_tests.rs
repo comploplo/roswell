@@ -5,9 +5,9 @@
 
 use std::process::Command;
 
-use roscmp::codegen;
-use roscmp::ir::MsgId;
-use roscmp::{parse_message, resolve};
+use roswell::codegen;
+use roswell::ir::MsgId;
+use roswell::{parse_message, resolve};
 
 const POINT: (&str, &str, &str) = (
     "geometry_msgs",
@@ -37,14 +37,14 @@ fn build_lib(defs: &[(&str, &str, &str)], dir: &std::path::Path) -> std::path::P
     std::fs::create_dir_all(dir).unwrap();
     let rs = dir.join("gen.rs");
     std::fs::write(&rs, codegen::rust::generate(&program)).unwrap();
-    std::fs::write(dir.join("roscmp_msgs.h"), codegen::c::generate(&program)).unwrap();
+    std::fs::write(dir.join("roswell_msgs.h"), codegen::c::generate(&program)).unwrap();
     std::fs::write(
-        dir.join("roscmp_msgs.py"),
+        dir.join("roswell_msgs.py"),
         codegen::python::generate(&program),
     )
     .unwrap();
 
-    let lib = dir.join(format!("libroscmp_gen.{}", dylib_ext()));
+    let lib = dir.join(format!("libroswell_gen.{}", dylib_ext()));
     let out = Command::new("rustc")
         .args(["--edition", "2021", "-O", "--crate-type", "cdylib"])
         .arg(&rs)
@@ -62,20 +62,20 @@ fn build_lib(defs: &[(&str, &str, &str)], dir: &std::path::Path) -> std::path::P
 
 #[test]
 fn c_and_python_serialize_through_rust_lib() {
-    let dir = std::env::temp_dir().join("roscmp_ffi_point");
+    let dir = std::env::temp_dir().join("roswell_ffi_point");
     let _ = std::fs::remove_dir_all(&dir);
     let lib = build_lib(&[POINT], &dir);
 
     // --- C side ---
     let c_main = r#"
 #include <stdio.h>
-#include "roscmp_msgs.h"
+#include "roswell_msgs.h"
 int main(void) {
     geometry_msgs__Point p = {1.0, 2.0, 3.0};
-    RoscmpBuf b = roscmp_geometry_msgs__Point_serialize(&p, 0);
+    RoswellBuf b = roswell_geometry_msgs__Point_serialize(&p, 0);
     for (size_t i = 0; i < b.len; i++) printf("%02x", b.ptr[i]);
     printf("\n");
-    roscmp_buf_free(b);
+    roswell_buf_free(b);
     return 0;
 }
 "#;
@@ -98,7 +98,7 @@ int main(void) {
 
     // --- Python side ---
     let py = format!(
-        "import roscmp_msgs as m\n\
+        "import roswell_msgs as m\n\
          m.load({:?})\n\
          p = m.geometry_msgs__Point(1.0, 2.0, 3.0)\n\
          print(m.geometry_msgs__Point_serialize(p).hex())\n",
@@ -127,12 +127,12 @@ int main(void) {
 
 #[test]
 fn python_round_trips_through_rust_lib() {
-    let dir = std::env::temp_dir().join("roscmp_ffi_rt");
+    let dir = std::env::temp_dir().join("roswell_ffi_rt");
     let _ = std::fs::remove_dir_all(&dir);
     let lib = build_lib(&[POINT], &dir);
 
     let py = format!(
-        "import roscmp_msgs as m\n\
+        "import roswell_msgs as m\n\
          m.load({:?})\n\
          p = m.geometry_msgs__Point(1.5, -2.5, 3.25)\n\
          data = m.geometry_msgs__Point_serialize(p)\n\

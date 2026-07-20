@@ -1,15 +1,15 @@
 """The package must work with numpy absent: primitive arrays degrade to lists.
 
 This deterministically forces the no-numpy path by flipping the module flags
-`roscmp._types` reads at call time, so it runs (and is CI-able) even in a venv
+`roswell._types` reads at call time, so it runs (and is CI-able) even in a venv
 that *has* numpy. A real numpy-less venv run is covered separately in CI; this
 guards the fallback logic itself. It imports no numpy.
 """
 
 import pytest
 
-import roscmp
-from roscmp import _types
+import roswell
+from roswell import _types
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def _sample_type(node, fixture_dir):
 
 
 def test_prim_sequence_is_list_without_numpy(no_numpy, fixture_dir):
-    node = roscmp.Node("py_nonumpy", domain=0)
+    node = roswell.Node("py_nonumpy", domain=0)
     try:
         T = _sample_type(node, fixture_dir)
         msg = T.alloc()
@@ -39,7 +39,7 @@ def test_prim_sequence_is_list_without_numpy(no_numpy, fixture_dir):
 
 
 def test_empty_sequence_is_empty_list_without_numpy(no_numpy, fixture_dir):
-    node = roscmp.Node("py_nonumpy_empty", domain=0)
+    node = roswell.Node("py_nonumpy_empty", domain=0)
     try:
         T = _sample_type(node, fixture_dir)
         msg = T.alloc()

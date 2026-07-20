@@ -3,16 +3,16 @@ requires = ["hatchling>=1.18", "packaging"]
 build-backend = "hatchling.build"
 
 [project]
-name = "roscmp"
+name = "roswell"
 dynamic = ["version"]
-description = "pip-installable Python that speaks ROS2 (RTPS/DDS) with zero ROS installation"
+description = "pip-installable Python that speaks ROS 2 over RTPS/DDS with zero ROS installation"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT OR Apache-2.0" }
-authors = [{ name = "roscmp" }]
+authors = [{ name = "Roswell contributors" }]
 keywords = ["ros2", "dds", "rtps", "robotics", "rmw", "rclpy"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
@@ -21,11 +21,11 @@ classifiers = [
     "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering",
     "Topic :: Software Development :: Libraries",
@@ -38,29 +38,66 @@ dependencies = []
 
 [project.optional-dependencies]
 numpy = ["numpy>=1.21"]
+release = ["build>=1", "cibuildwheel>=3; python_version >= '3.11'", "twine>=5"]
 test = ["numpy>=1.21", "pytest>=7"]
 
-# NOTE: placeholder URLs — no public repository is configured yet. Update these
-# to the real project home before publishing to PyPI.
-[project.urls]
-Homepage = "https://github.com/roscmp/roscmp"
-Repository = "https://github.com/roscmp/roscmp"
-Documentation = "https://github.com/roscmp/roscmp/tree/main/python#readme"
-Issues = "https://github.com/roscmp/roscmp/issues"
-
-# Single-source the version from the crate (roscmp-c/Cargo.toml).
+# Single-source the version from the crate (roswell-c/Cargo.toml).
 [tool.hatch.version]
-path = "../roscmp-c/Cargo.toml"
+path = "../roswell-c/Cargo.toml"
 pattern = 'version = "(?P<version>[^"]+)"'
 
 [tool.hatch.build.targets.wheel]
-packages = ["roscmp"]
+packages = ["roswell"]
 # The cdylib and bundled interfaces are injected by the build hook (force_include);
 # these patterns let hatchling ship them if they already exist in the tree.
-artifacts = ["roscmp/_lib/*", "roscmp/interfaces/**/*"]
+artifacts = ["roswell/_lib/*", "roswell/interfaces/**/*"]
 
 [tool.hatch.build.targets.wheel.hooks.custom]
 path = "hatch_build.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["roscmp", "hatch_build.py", "README.md"]
+include = ["roswell", "hatch_build.py", "README.md"]
+
+[tool.hatch.build.targets.sdist.force-include]
+"../Cargo.toml" = "Cargo.toml"
+"../Cargo.lock" = "Cargo.lock"
+"../src" = "src"
+"../samples" = "samples"
+"../roswell-c" = "roswell-c"
+"../roswell-ros2-compat" = "roswell-ros2-compat"
+"../roswell-verify" = "roswell-verify"
+"../roswell-tunnel-core" = "roswell-tunnel-core"
+"../roswell-build" = "roswell-build"
+"../LICENSE-MIT" = "LICENSE-MIT"
+"../LICENSE-APACHE" = "LICENSE-APACHE"
+
+[tool.cibuildwheel]
+# The package uses ctypes over a stable C ABI, so one CPython build per platform
+# produces a py3-none-<platform> wheel usable across supported Python versions.
+build = "cp312-*"
+skip = [
+    "*-musllinux*",
+    "*-manylinux_i686",
+    "*-manylinux_ppc64le",
+    "*-manylinux_s390x",
+    "*-manylinux_armv7l",
+    "*-manylinux_riscv64",
+    "*-win32",
+    "*-win_arm64",
+]
+test-command = "python -c \"import roswell\""
+build-verbosity = 1
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64", "aarch64"]
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+environment = { PATH = "$HOME/.cargo/bin:$PATH" }
+before-all = "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable"
+
+[tool.cibuildwheel.macos]
+archs = ["universal2"]
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]

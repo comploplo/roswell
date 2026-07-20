@@ -1,4 +1,4 @@
-// Cortex-M0 with a single PL011 UART, for the roscmp tunnel-over-UART HIL test.
+// Cortex-M0 with a single PL011 UART, for the roswell tunnel-over-UART HIL test.
 // hilt sets SP/PC/VTOR from the ELF vector table (CpuInit::VectorTable).
 
 flash: Memory.MappedMemory @ sysbus 0x10000000

@@ -9,9 +9,9 @@
 
 use std::process::Command;
 
-use roscmp::codegen;
-use roscmp::ir::{MsgId, Program};
-use roscmp::{parse_message, resolve};
+use roswell::codegen;
+use roswell::ir::{MsgId, Program};
+use roswell::{parse_message, resolve};
 
 /// Build a program from inline `(package, Name, source)` triples.
 fn program_from(defs: &[(&str, &str, &str)]) -> Program {
@@ -26,7 +26,7 @@ fn program_from(defs: &[(&str, &str, &str)]) -> Program {
 }
 
 fn tmp_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("roscmp_layout_{tag}"));
+    let dir = std::env::temp_dir().join(format!("roswell_layout_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -77,10 +77,10 @@ fn rust_layout(program: &Program, symbol: &str, fields: &[&str], dir: &std::path
 /// Compile the generated C header and report the layout via `offsetof`.
 fn c_layout(program: &Program, symbol: &str, fields: &[&str], dir: &std::path::Path) -> Layout {
     let header = codegen::c::generate(program);
-    std::fs::write(dir.join("roscmp_msgs.h"), &header).unwrap();
+    std::fs::write(dir.join("roswell_msgs.h"), &header).unwrap();
 
     let mut main =
-        String::from("#include <stdio.h>\n#include <stddef.h>\n#include \"roscmp_msgs.h\"\n");
+        String::from("#include <stdio.h>\n#include <stddef.h>\n#include \"roswell_msgs.h\"\n");
     main.push_str("int main(void) {\n");
     main.push_str(&format!("  printf(\"%zu\\n\", sizeof({symbol}));\n"));
     for f in fields {
@@ -116,9 +116,9 @@ fn python_layout(
     dir: &std::path::Path,
 ) -> Layout {
     let module = codegen::python::generate(program);
-    std::fs::write(dir.join("roscmp_msgs.py"), &module).unwrap();
+    std::fs::write(dir.join("roswell_msgs.py"), &module).unwrap();
 
-    let mut script = String::from("import ctypes, roscmp_msgs as m\n");
+    let mut script = String::from("import ctypes, roswell_msgs as m\n");
     script.push_str(&format!("print(ctypes.sizeof(m.{symbol}))\n"));
     for f in fields {
         script.push_str(&format!("print('{f}', m.{symbol}.{f}.offset)\n"));

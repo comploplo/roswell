@@ -1,6 +1,6 @@
-use roscmp::ast::*;
-use roscmp::ir::MsgId;
-use roscmp::{codegen, parse_idl, parse_message, resolve};
+use roswell::ast::*;
+use roswell::ir::MsgId;
+use roswell::{codegen, parse_idl, parse_message, resolve};
 use std::process::Command;
 
 fn field<'a>(spec: &'a MessageSpec, name: &str) -> &'a Field {
@@ -142,7 +142,7 @@ module geometry_msgs {
     let program = resolve(inputs).unwrap();
     let code = codegen::rust::generate(&program);
 
-    let dir = std::env::temp_dir().join("roscmp_idl");
+    let dir = std::env::temp_dir().join("roswell_idl");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let rs = dir.join("gen.rs");

@@ -76,7 +76,7 @@ impl Cursor {
 /// alignment (1, 2, 4, or 8) — a nonzero power of two — at every call site.
 ///
 /// This is the exact formula machine-checked (Creusot) as
-/// `roscmp_verify::pad_to`: given `a > 0` it never panics (no
+/// `roswell_verify::pad_to`: given `a > 0` it never panics (no
 /// division-by-zero, no underflow in `a - off % a`), the result is strictly
 /// less than `a`, and `off + result` is an exact multiple of `a`. The embedded
 /// copy here is held identical by `cdr::tests::pad_to_matches_verified_core`.
@@ -104,7 +104,20 @@ impl Writer {
     /// Start a new message with an explicit [`Encoding`], emitting the matching
     /// encapsulation header.
     pub fn with_encoding(endian: Endian, encoding: Encoding) -> Self {
-        let mut buf = Vec::with_capacity(64);
+        Self::from_vec(Vec::with_capacity(64), endian, encoding)
+    }
+
+    /// Start a message that appends into a caller-provided buffer, reusing its
+    /// allocation. `buf` is cleared, the encapsulation header written, and the
+    /// body origin set — the emitted bytes are byte-for-byte identical to
+    /// [`with_encoding`], but no fresh allocation happens when `buf` already has
+    /// capacity. This is the right-sizing hot path behind loaned-buffer
+    /// publishing: hand in a buffer sized to the previous sample and
+    /// serialization of a same-sized sample reallocates zero times, instead of
+    /// growing a 64-byte `Vec` through ~log2(N) doublings (each copying the
+    /// bytes accumulated so far).
+    pub fn from_vec(mut buf: Vec<u8>, endian: Endian, encoding: Encoding) -> Self {
+        buf.clear();
         let repr = match (encoding, endian) {
             (Encoding::Xcdr1, Endian::Little) => REPR_CDR_LE,
             (Encoding::Xcdr1, Endian::Big) => REPR_CDR_BE,

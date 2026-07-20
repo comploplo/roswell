@@ -4,14 +4,14 @@
 //! typed-pub -> raw-sub working over real RTPS/UDP.
 //!
 //! `#[ignore]`d (opens real DDS sockets, ~seconds). Run:
-//!   cargo test -p roscmp-hil --test raw_dds_probe -- --ignored --nocapture
+//!   cargo test -p roswell-hil --test raw_dds_probe -- --ignored --nocapture
 
 use std::ffi::c_char;
 use std::time::{Duration, Instant};
 
-use roscmp_dds::msgs::{std_msgs__String, RosString};
-use roscmp_dds::raw::{raw_qos_for_topic, RawDdsPublisher, RawDdsSubscriber, RawMsg};
-use roscmp_dds::transport::{Dds, MsgPublisher, Qos, Transport};
+use roswell_ros2_compat::msgs::{std_msgs__String, RosString};
+use roswell_ros2_compat::raw::{raw_qos_for_topic, RawDdsPublisher, RawDdsSubscriber, RawMsg};
+use roswell_ros2_compat::transport::{Dds, MsgPublisher, Qos, Transport};
 
 fn wait_for_sample(
     sub: &mut RawDdsSubscriber,

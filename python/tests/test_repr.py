@@ -1,6 +1,6 @@
 """__repr__ on the public objects surfaces topic/name/type for observability."""
 
-import roscmp
+import roswell
 
 
 def _sample_type(node, fixture_dir):
@@ -8,7 +8,7 @@ def _sample_type(node, fixture_dir):
 
 
 def test_reprs_show_identity(fixture_dir):
-    node = roscmp.Node("py_repr", domain=0)
+    node = roswell.Node("py_repr", domain=0)
     try:
         assert "py_repr" in repr(node)
         T = _sample_type(node, fixture_dir)

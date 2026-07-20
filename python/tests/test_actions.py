@@ -3,7 +3,7 @@
 The action *server* is built entirely from the existing Python primitives —
 ``node.serve`` for the three action services and ``node.publisher`` for the
 feedback topic — using the wrapper types from ``node.load_action``. The client is
-the runtime-typed :class:`roscmp.ActionClient`. This exercises the full protocol:
+the runtime-typed :class:`roswell.ActionClient`. This exercises the full protocol:
 send_goal -> feedback -> get_result, plus cancel.
 """
 
@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-import roscmp
+import roswell
 
 ACTION = "/fib"
 ACTION_TYPE = "example_interfaces/action/Fibonacci"
@@ -128,8 +128,8 @@ class FibServer:
 
 @pytest.fixture
 def server_and_client():
-    server_node = roscmp.Node("fib_server", domain=0)
-    client_node = roscmp.Node("fib_client", domain=0)
+    server_node = roswell.Node("fib_server", domain=0)
+    client_node = roswell.Node("fib_client", domain=0)
     types = server_node.load_action(ACTION_TYPE)
     cancel_types = server_node.load_service("action_msgs/srv/CancelGoal")
     server = FibServer(server_node, ACTION, types, cancel_types)
@@ -149,7 +149,7 @@ def _send_goal(ac, order, tries=25):
     for _ in range(tries):
         try:
             return ac.send_goal_sync(goal, timeout=2.0)
-        except roscmp.RoscmpTimeout:
+        except roswell.RoswellTimeout:
             continue
     pytest.fail("send_goal never got a reply")
 
@@ -177,7 +177,7 @@ def test_action_send_feedback_result(server_and_client):
         try:
             status, result = ac.get_result_sync(goal_id, timeout=2.0)
             break
-        except roscmp.RoscmpTimeout:
+        except roswell.RoswellTimeout:
             continue
     assert status == STATUS_SUCCEEDED
     assert list(result.sequence) == fibonacci(5)
@@ -195,4 +195,4 @@ def test_action_cancel(server_and_client):
 
 def test_action_client_repr(server_and_client):
     server, ac = server_and_client
-    assert repr(ac) == "<roscmp.ActionClient name='/fib' type='example_interfaces/action/Fibonacci'>"
+    assert repr(ac) == "<roswell.ActionClient name='/fib' type='example_interfaces/action/Fibonacci'>"

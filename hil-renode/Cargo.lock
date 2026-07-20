@@ -550,6 +550,8 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "hilt"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cecb0007f334c505eb27de0b7090f04e20a773665491115a19604c46e7e056a4"
 
 [[package]]
 name = "iana-time-zone"
@@ -1193,7 +1195,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
-name = "roscmp-dds"
+name = "roswell-hil"
+version = "0.1.0"
+dependencies = [
+ "hilt",
+ "roswell-ros2-compat",
+ "roswell-tunnel-core",
+]
+
+[[package]]
+name = "roswell-hil-fw"
+version = "0.1.0"
+dependencies = [
+ "cortex-m-rt",
+ "roswell-tunnel-core",
+]
+
+[[package]]
+name = "roswell-ros2-compat"
 version = "0.1.0"
 dependencies = [
  "bytes",
@@ -1202,35 +1221,18 @@ dependencies = [
  "mio 0.8.11",
  "quick-xml",
  "ratatui",
- "roscmp-tunnel-core",
- "roscmp-verify",
+ "roswell-tunnel-core",
+ "roswell-verify",
  "rustdds",
  "ruzstd",
 ]
 
 [[package]]
-name = "roscmp-hil"
-version = "0.1.0"
-dependencies = [
- "hilt",
- "roscmp-dds",
- "roscmp-tunnel-core",
-]
-
-[[package]]
-name = "roscmp-hil-fw"
-version = "0.1.0"
-dependencies = [
- "cortex-m-rt",
- "roscmp-tunnel-core",
-]
-
-[[package]]
-name = "roscmp-tunnel-core"
+name = "roswell-tunnel-core"
 version = "0.1.0"
 
 [[package]]
-name = "roscmp-verify"
+name = "roswell-verify"
 version = "0.1.0"
 
 [[package]]

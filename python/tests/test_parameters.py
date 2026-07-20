@@ -7,11 +7,11 @@ CRUD is deterministic; the event assertion retries while discovery settles.
 
 import time
 
-import roscmp
+import roswell
 
 
 def test_parameter_crud_roundtrip():
-    node = roscmp.Node("py_param_crud", domain=0)
+    node = roswell.Node("py_param_crud", domain=0)
     try:
         assert node.declare_parameter("speed", 1.5) == 1.5
         node.declare_parameter("gain", 7)
@@ -33,16 +33,16 @@ def test_parameter_crud_roundtrip():
 
 
 def test_parameter_undeclared_raises():
-    node = roscmp.Node("py_param_missing", domain=0)
+    node = roswell.Node("py_param_missing", domain=0)
     try:
-        with __import__("pytest").raises(roscmp.RoscmpError):
+        with __import__("pytest").raises(roswell.RoswellError):
             node.get_parameter("nope")
     finally:
         node.close()
 
 
 def test_parameter_events_published():
-    node = roscmp.Node("py_param_evt", domain=0)
+    node = roswell.Node("py_param_evt", domain=0)
     try:
         # Path-free reference resolves the dependency closure from samples/.
         Evt = node.load_type("rcl_interfaces/msg/ParameterEvent")

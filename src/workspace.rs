@@ -9,7 +9,7 @@
 //!   as pointed at by `AMENT_PREFIX_PATH`.
 //!
 //! Both layouts are probed for every lookup, so a caller can hand us `type_paths`,
-//! `ROSCMP_TYPE_PATH`, and `AMENT_PREFIX_PATH` entries interchangeably. Parsing
+//! `ROSWELL_TYPE_PATH`, and `AMENT_PREFIX_PATH` entries interchangeably. Parsing
 //! and dependency resolution stay here in Rust; the Python/C caller only passes
 //! the reference string and the list of root directories.
 //!
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn ament_share_layout_is_probed() {
         // Build a temp install prefix: <root>/share/foo_msgs/msg/Ping.msg
-        let dir = std::env::temp_dir().join(format!("roscmp_ws_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("roswell_ws_{}", std::process::id()));
         let msg_dir = dir.join("share").join("foo_msgs").join("msg");
         std::fs::create_dir_all(&msg_dir).unwrap();
         std::fs::write(msg_dir.join("Ping.msg"), "int32 seq\nstring note\n").unwrap();
